@@ -105,16 +105,40 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.info_bar_de.set_visible(not self.is_de_supported)
         main_vbox.pack_start(self.info_bar_de, False, False, 0)
 
-        # InfoBar for Systemd Availability
-        self.info_bar_systemd = Gtk.InfoBar()
-        self.info_bar_systemd.set_message_type(Gtk.MessageType.WARNING)
-        content_area_systemd = self.info_bar_systemd.get_content_area()
-        content_area_systemd.add(
-            Gtk.Label("Systemd is not available. Automatic wallpaper scheduling will not work.")
-        )
-        self.info_bar_systemd.show_all()
-        self.info_bar_systemd.set_visible(not self.is_systemd_available)
-        main_vbox.pack_start(self.info_bar_systemd, False, False, 0)
+        # --- System Status ---
+        frame_status = Gtk.Frame(label="System Capabilities")
+        main_vbox.pack_start(frame_status, False, False, 0)
+
+        grid_status = Gtk.Grid()
+        grid_status.set_column_spacing(10)
+        grid_status.set_row_spacing(5)
+        grid_status.set_margin_top(10)
+        grid_status.set_margin_bottom(10)
+        grid_status.set_margin_start(10)
+        grid_status.set_margin_end(10)
+        frame_status.add(grid_status)
+
+        # Manual Wallpaper Status
+        lbl_manual_icon = Gtk.Label(label="✅")
+        lbl_manual = Gtk.Label(label="Manual Wallpaper Change: Available")
+        lbl_manual.set_halign(Gtk.Align.START)
+        grid_status.attach(lbl_manual_icon, 0, 0, 1, 1)
+        grid_status.attach(lbl_manual, 1, 0, 1, 1)
+
+        # Scheduling Status
+        if self.is_systemd_available:
+            lbl_sched_icon = Gtk.Label(label="✅")
+            lbl_sched = Gtk.Label(label="Automatic Scheduling: Available")
+        else:
+            lbl_sched_icon = Gtk.Label(label="⚠️")
+            lbl_sched = Gtk.Label(label="Automatic Scheduling: Unavailable (Systemd not detected)")
+            lbl_sched.set_tooltip_text(
+                "Automatic scheduling requires systemd, which was not found on this system.\n"
+                "You can still change wallpapers manually using the 'Next Wallpaper' button."
+            )
+        lbl_sched.set_halign(Gtk.Align.START)
+        grid_status.attach(lbl_sched_icon, 0, 1, 1, 1)
+        grid_status.attach(lbl_sched, 1, 1, 1, 1)
 
         # --- Section 1: Source Configuration ---
         frame_source = Gtk.Frame(label="Source Configuration")
@@ -373,7 +397,9 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Disable scheduling controls if systemd is not available
         if not self.is_systemd_available:
             self.spin_interval.set_sensitive(False)
+            self.spin_interval.set_tooltip_text("Disabled because systemd was not found.")
             self.check_startup.set_sensitive(False)
+            self.check_startup.set_tooltip_text("Disabled because systemd was not found.")
             # The Save button should still be sensitive if other settings (not related to scheduling) can be saved.
             # But the schedule itself will not work, so disabling save for scheduling is fine.
             # However, if DE is supported but systemd is not, save button should still be sensitive
@@ -478,10 +504,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
         # Toggle visibility of local folder controls
         self.lbl_folder.set_visible(is_local)
-        self.entry_folder.set_parent_visible(is_local)  # entry is in a box
-        self.entry_folder.get_parent().set_visible(
-            is_local
-        )  # Hide the HBox containing entry and browse
+        self.entry_folder.get_parent().set_visible(is_local)  # Hide the HBox containing entry and browse
         self.check_recursive.set_visible(is_local)
 
         # Toggle visibility of Unsplash controls
@@ -731,10 +754,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
     def setup_systemd_timer(self, interval, startup):
         if not self.is_systemd_available:
-            logging.warning("Systemd is not available, skipping timer setup.")
-            show_error_dialog(
-                "Systemd is not available. Automatic wallpaper scheduling will not work.", self
-            )
+            logging.warning("Systemd is not available, skipping timer setup (this is expected on non-systemd systems).")
+            # We do not show an error dialog here anymore, as the UI already informs the user about this limitation.
             return
 
         systemd_path = os.path.join(os.path.expanduser("~"), ".config", "systemd", "user")

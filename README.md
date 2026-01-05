@@ -15,20 +15,21 @@ WallShuffle allows you to automatically change your desktop wallpaper at a defin
 - **Persistent Configuration:** Saves your settings between sessions.
 - **Single Instance:** Ensures only one instance of the application runs at a time.
 
-## Installation (AppImage)
+## Installation
 
-The easiest way to get started is by using the official AppImage.
+The easiest way to get started is by using the included installation script.
 
-1.  **Download:** Go to the [GitHub Releases page](https://github.com/your_username/wallshuffle/releases) and download the latest `WallShuffle-x86_64.AppImage` file.
-2.  **Make it Executable:**
+1.  **Download:** Clone the repository or download the release.
+2.  **Install:**
     ```bash
-    chmod +x WallShuffle-x86_64.AppImage
+    ./install.sh
     ```
-3.  **Run:**
-    ```bash
-    ./WallShuffle-x86_64.AppImage
-    ```
-    On first run, you may be asked if you want to integrate the application with your system. If you agree, WallShuffle will be added to your application menu.
+    This script will:
+    - Copy the AppImage to `~/Applications`.
+    - Create a wrapper script in `~/.local/bin/wallshuffle` (so you can run `wallshuffle` from anywhere).
+    - Add a desktop entry so it appears in your application menu.
+
+Alternatively, you can manually download the `WallShuffle-x86_64.AppImage` and run it directly.
 
 ## Usage
 
@@ -128,32 +129,14 @@ make build
 
 ## Uninstall
 
-To completely remove Wallshuffle from your system:
+To completely remove Wallshuffle from your system, use the provided uninstall script:
 
-1.  **Stop and Disable systemd Timer (if enabled):**
-    ```bash
-    systemctl --user stop wallpaper-changer.timer
-    systemctl --user disable wallpaper-changer.timer
-    systemctl --user stop wallpaper-changer.service
-    systemctl --user disable wallpaper-changer.service
-    systemctl --user daemon-reload
-    ```
-    *Note: These commands will only work if `systemd` is available on your system and the timer was previously enabled.*
+```bash
+./uninstall.sh
+```
 
-2.  **Remove Configuration Files:**
-    ```bash
-    rm -rf ~/.config/wallshuffle
-    rm -f ~/.config/systemd/user/wallpaper-changer.service
-    rm -f ~/.config/systemd/user/wallpaper-changer.timer
-    ```
+This script will safely remove the AppImage, wrapper, desktop entries, icons, and disable any active systemd timers.
 
-3.  **Remove the AppImage:**
-    Simply delete the `WallShuffle-x86_64.AppImage` file from wherever you downloaded it.
-
-4.  **Remove Desktop Entry and Icon (if integrated):**
-    If you chose to integrate the AppImage with your system, you might also want to remove its desktop entry and icon. This typically involves removing files from `~/.local/share/applications/` and `~/.local/share/icons/`.
-    ```bash
-    rm -f ~/.local/share/applications/wallshuffle.desktop
-    rm -f ~/.local/share/icons/hicolor/scalable/apps/wallshuffle.png
-    update-desktop-database ~/.local/share/applications/
-    ```
+Options:
+- `./uninstall.sh --purge`: Also removes configuration files and logs.
+- `./uninstall.sh --help`: Show usage information.

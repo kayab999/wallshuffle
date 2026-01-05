@@ -48,6 +48,7 @@ class WallpaperApp(Gtk.Application):
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGHUP, self._signal_handler)
+        signal.signal(signal.SIGUSR1, self._handle_sigusr1)
 
         self.logger.debug("Initializing ThemeManager in WallpaperApp.__init__")
         self.config_manager = ConfigManager()
@@ -107,6 +108,11 @@ class WallpaperApp(Gtk.Application):
         elif signum == signal.SIGHUP:
             # Hangup signal - typically from terminal closure
             self.quit()
+
+    def _handle_sigusr1(self, signum, frame):
+        """Handle SIGUSR1 to activate/show the window."""
+        self.logger.info("Received SIGUSR1, activating window...")
+        GLib.idle_add(self.do_activate)
 
     def _is_lock_stale(self, lock_path, max_age_hours=1):
         """
@@ -224,9 +230,17 @@ class WallpaperApp(Gtk.Application):
 
                 self.logger.warning(
                     f"Another instance is running (PID {existing_pid}). "
-                    f"Lock file: {self.lock_file_path}"
+                    f"Sending SIGUSR1 to activate it."
                 )
 
+                # Send signal to existing process to wake it up
+                if existing_pid and existing_pid.isdigit():
+                    try:
+                        os.kill(int(existing_pid), signal.SIGUSR1)
+                        self.logger.info(f"Sent SIGUSR1 to process {existing_pid}")
+                    except OSError as e:
+                        self.logger.error(f"Failed to signal existing process {existing_pid}: {e}")
+                
                 # Clean up fd
                 if self.lock_file_fd is not None:
                     try:
@@ -235,11 +249,7 @@ class WallpaperApp(Gtk.Application):
                         pass
                     self.lock_file_fd = None
 
-                show_error_dialog(
-                    f"Another instance of WallShuffle is already running (PID {existing_pid}).\n\n"
-                    f"If this is incorrect, delete:\n{self.lock_file_path}",
-                    self.win,
-                )
+                # Return False to exit this instance (but don't show error dialog)
                 return False
             else:
                 self.logger.error(f"Error acquiring lock: {e}", exc_info=True)
@@ -290,6 +300,7 @@ class WallpaperApp(Gtk.Application):
         self.create_status_icon()
 
     def do_activate(self):
+        self.logger.debug("do_activate called")
         if not self.win:
             self.win = WallpaperAppWindow(
                 application=self,
@@ -298,7 +309,11 @@ class WallpaperApp(Gtk.Application):
                 is_de_supported=self.is_de_supported,
                 is_systemd_available=self.is_systemd_available,
             )
-        self.win.present()
+        
+        # Ensure window is visible and presented
+        self.win.show()
+        self.win.deiconify()  # Unminimize if minimized
+        self.win.present()    # Move to front/focus
 
     def create_status_icon(self):
         self.logger.debug("create_status_icon called.")
