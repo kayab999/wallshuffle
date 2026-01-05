@@ -1,0 +1,16 @@
+[Desktop Entry]
+Name=Yaru-wartybrown
+Type=X-GNOME-Metatheme
+Comment=Ubuntu Yaru-wartybrown theme
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Yaru-wartybrown
+MetacityTheme=Yaru
+IconTheme=Yaru-wartybrown
+CursorTheme=Yaru
+CursorSize=24
+X-Yaru-Dark=false
+X-Yaru-Accent-Name=wartybrown
+X-Yaru-Accent-Color=#B39169
+/build/yaru-theme-M8FFgC/yaru-theme-25.04.1/obj-x86_64-linux-gnu/gtk/src/Yaru-wartybrown-wartybrown-accent-color-info.scss:46 DEBUG: Contrast optimized accent is #B39169

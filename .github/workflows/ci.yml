@@ -1,0 +1,42 @@
+name: WallShuffle CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgirepository1.0-dev python3-gi python3-gi-cairo gir1.2-gtk-3.0 libcairo2-dev
+    
+    - name: Install dependencies
+      run: |
+        make install
+        
+    - name: Lint with Ruff & Mypy
+      run: |
+        make lint
+        
+    - name: Test with Pytest
+      run: |
+        # Run non-GUI tests only on CI (headless)
+        venv/bin/python -m pytest -m "not gui"

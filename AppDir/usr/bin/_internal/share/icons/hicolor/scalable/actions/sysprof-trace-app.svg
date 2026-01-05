@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" version="1.0" xmlns="http://www.w3.org/2000/svg">
+ <g transform="translate(0 -236)">
+  <rect x="4.127" y="240.13" width="55.79" height="55.997" rx="3.804" ry="3.804" fill="#fff" overflow="visible" stroke="#98c1f1" stroke-width="4"/>
+  <path d="M3.161 238.981h57.867v58.021H3.161z" fill="none" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="8" y="256" width="16" height="6.113" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="26" y="258" width="12" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="10" y="258" width="12" height="1.759" rx="0" ry="0" fill="#fff" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <path d="m4.596 255.5h55.08" fill="#eeeeec" overflow="visible" stroke="#98c1f1" style="isolation:auto;mix-blend-mode:normal"/>
+  <path d="M49.35 245.956l-.025.025H48.19v1.153l-.018.018 1.78 1.764-1.78 1.763.025.025h-.008v1.16h1.152l.01.01.01-.01h.013v-.014l1.767-1.753 1.793 1.776.01-.01h1.165v-1.16h-.022l.026-.026-1.78-1.763 1.78-1.764-.01-.01h.005v-1.161H52.96l-.025-.025-1.793 1.776z" fill="#98c1f1" font-family="sans-serif" font-weight="400" overflow="visible" style="font-feature-settings:normal;font-variant-alternates:normal;font-variant-caps:normal;font-variant-ligatures:normal;font-variant-numeric:normal;font-variant-position:normal;isolation:auto;mix-blend-mode:normal;shape-padding:0;text-decoration-color:#000;text-decoration-line:none;text-decoration-style:solid;text-indent:0;text-orientation:mixed;text-transform:none;white-space:normal"/>
+  <rect x="40" y="258" width="12" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect transform="scale(1 -1)" x="8.584" y="-285.5" width="24.916" height="23" rx="0" ry="0" fill="none" overflow="visible" stroke="#98c1f1" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="11" y="265" width="12" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="11" y="269" width="17" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="11" y="273" width="12" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="11" y="277" width="9" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="11" y="281" width="15" height="2" rx="0" ry="0" fill="#98c1f1" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+ </g>
+</svg>

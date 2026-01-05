@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wallshuffle"
+version = "1.0.0"
+description = "A GTK-based wallpaper changer for Linux desktops."
+authors = [
+    { name = "Carlos", email = "carlos@example.com" },
+]
+dependencies = [
+    "Pillow",
+    "requests",
+    "pygobject",
+]
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["gtk", "python", "gui", "wallpaper", "linux"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Desktop Environment",
+]
+
+[project.scripts]
+wallshuffle = "wallshuffle.__main__:main"
+
+[project.gui-scripts]
+wallshuffle-gui = "wallshuffle.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wallshuffle"]
+
+[tool.ruff]
+line-length = 170
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+]
+ignore = [
+    "E402", # Module level import not at top of file (Required for Gtk)
+]
+exclude = [
+    "build_deb",
+    "dist",
+    "build",
+    ".pytest_cache",
+    ".ruff_cache",
+    "venv",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --strict-markers"
+markers = [
+    "gui: marks tests that require GUI/display",
+    "integration: marks tests that touch the filesystem/network"
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+disallow_untyped_defs = false  # Relaxed for now, tighten later
+
+[[tool.mypy.overrides]]
+module = [
+    "gi.*",
+    "PIL.*"
+]
+ignore_missing_imports = true
+

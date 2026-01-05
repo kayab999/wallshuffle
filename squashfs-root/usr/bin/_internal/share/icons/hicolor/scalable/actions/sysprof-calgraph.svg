@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" version="1.0" xmlns="http://www.w3.org/2000/svg">
+ <g transform="translate(0 -236)">
+  <rect x="4.02" y="247" width="56.02" height="42.159" rx="3.804" ry="3.804" fill="#fff" overflow="visible" stroke="#98c1f1" stroke-width="4"/>
+  <path d="M4.272 239.04h57.102v57.102H4.272z" fill="none" overflow="visible" style="isolation:auto;mix-blend-mode:normal"/>
+  <rect x="8.01" y="251.93" width="42.453" height="31.378" rx="1.846" ry="1.846" fill="#98c1f1"/>
+  <path d="M9.855 269.463H23.7l3.691-9.23L29.236 275l3.692-5.537h15.689" fill="none" opacity=".236" stroke="#fff" stroke-miterlimit="10"/>
+  <path d="M9.855 269.02H23.7l3.691-9.228 1.846 14.766 3.692-5.537h1.73" fill="none" stroke="#fff" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2"/>
+  <path d="M56 268.094V270a1.905 1.905 0 01-1.905 1.905A1.905 1.905 0 0152.189 270a1.905 1.905 0 011.906-1.906zM52.189 260.095V262a1.905 1.905 0 001.906 1.906A1.905 1.905 0 0056 262a1.905 1.905 0 00-1.905-1.905zM56 256v-1.905a1.905 1.905 0 00-1.905-1.906 1.905 1.905 0 00-1.906 1.906A1.905 1.905 0 0054.095 256z" fill="#98c1f1"/>
+ </g>
+</svg>

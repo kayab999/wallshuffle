@@ -1,0 +1,8 @@
+# Core Dependencies
+Pillow>=10.0.0
+requests>=2.31.0
+pygobject>=3.42.0
+
+# Build Tools
+setuptools>=61.0
+wheel
