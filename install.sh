@@ -132,7 +132,15 @@ if command -v update-desktop-database &> /dev/null; then
     update-desktop-database "$DESKTOP_DIR"
 fi
 
-echo ""
 echo "--- Installation Complete! ---"
 echo "WallShuffle v1.0 has been installed."
 echo "You can launch it from your application menu."
+
+# Check PATH
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+  echo ""
+  echo "NOTE: ~/.local/bin is not in your PATH."
+  echo "To run 'wallshuffle' from the terminal, add this to your ~/.bashrc or ~/.zshrc:"
+  echo '  export PATH="$HOME/.local/bin:$PATH"'
+  echo "Or simply restart your session."
+fi
