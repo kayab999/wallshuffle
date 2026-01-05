@@ -17,6 +17,51 @@ DESKTOP_FILE_SOURCE="wallshuffle.desktop"
 
 echo "--- Installing WallShuffle v1.0 (AppImage) ---"
 
+# --- 0. Pre-flight Check: libfuse2 (Critical for AppImages on modern Ubuntu/Debian) ---
+check_libfuse2() {
+  # dpkg-query returns 0 if package installed
+  if command -v dpkg-query >/dev/null 2>&1; then
+    if dpkg-query -W -f='${Status}' libfuse2 2>/dev/null | grep -q "install ok installed"; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+
+  # Fallback: check if fuse lib exists (generic)
+  if ldconfig -p 2>/dev/null | grep -q "libfuse"; then
+    return 0
+  fi
+
+  return 1
+}
+
+if ! check_libfuse2; then
+  echo ""
+  echo "WARNING: On this distribution, AppImages may require 'libfuse2' to run."
+  echo "If the AppImage fails to start, you likely need to install it."
+  echo ""
+  echo "  sudo apt update && sudo apt install libfuse2"
+  echo ""
+  
+  # Only ask if interactive
+  if [ -t 0 ]; then
+      read -p "Do you want to try installing libfuse2 now? [y/N]: " yn
+      case "$yn" in
+        [Yy]* )
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt update && sudo apt install -y libfuse2
+          else
+            echo "sudo not found. Please install libfuse2 manually."
+          fi
+          ;;
+        * ) echo "Proceeding without installing libfuse2. AppImage might not run.";;
+      esac
+  else
+      echo "Non-interactive mode detected. Skipping optional libfuse2 installation."
+  fi
+fi
+
 # 1. Check if AppImage exists
 if [ ! -f "$APP_IMAGE" ]; then
     echo "ERROR: $APP_IMAGE not found in current directory."
@@ -41,14 +86,20 @@ cat > "$INSTALL_DIR/$APP_NAME" <<'EOF'
 #!/usr/bin/env bash
 # Wallshuffle wrapper: execute the user-installed script, fallback to AppImage
 
-# Try AppImage in ~/Applications
+# 1. Prefer an editable install (pip install -e .) if found in PATH, BUT
+# ensure we don't just find this script itself recursively.
+if command -v wallshuffle >/dev/null 2>&1 && [ "$(command -v wallshuffle)" != "$0" ]; then
+  exec "$(command -v wallshuffle)" "$@"
+fi
+
+# 2. Try AppImage in ~/Applications
 APPIMAGE_HOME="$HOME/Applications/WallShuffle.AppImage"
 if [ -x "$APPIMAGE_HOME" ]; then
   exec "$APPIMAGE_HOME" "$@"
 fi
 
-# As a last resort, try APPIMAGE env (if running inside another AppImage)
-if [ -n "$APPIMAGE" ] && [ -x "$APPIMAGE" ]; then
+# 3. As a last resort, try APPIMAGE env (if running inside another AppImage)
+if [ -n "${APPIMAGE:-}" ] && [ -x "$APPIMAGE" ]; then
   exec "$APPIMAGE" "$@"
 fi
 

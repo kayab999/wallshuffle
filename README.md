@@ -4,6 +4,22 @@ A simple yet powerful wallpaper changer for Linux desktops, built with Python an
 
 WallShuffle allows you to automatically change your desktop wallpaper at a defined interval, using images from a local folder or from the vast collection on Unsplash.
 
+## ⚠️ Important: AppImage Requirements (Ubuntu/Debian)
+
+On some modern distributions (Ubuntu 22.04+, Debian 12+), AppImages require **`libfuse2`** to run.
+If the application does not start when you double-click the AppImage, please install this library:
+
+```bash
+sudo apt update && sudo apt install libfuse2
+```
+
+Alternatively, you can install WallShuffle in development mode (which avoids the AppImage wrapper issue):
+```bash
+pip install -e . --user
+```
+
+**Recommended:** Use the provided `./install.sh` script, which handles checking for this requirement.
+
 ## Features
 
 - **Multiple Sources:** Use images from a local folder or fetch them from Unsplash using keywords.
