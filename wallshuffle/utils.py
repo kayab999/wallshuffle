@@ -1,9 +1,9 @@
+import fcntl
 import logging
 import os
 import shutil
 import subprocess
 import sys
-import fcntl
 
 import gi
 
@@ -45,12 +45,7 @@ def show_error_dialog(message, parent=None):
         # Try notify-send if DISPLAY is set, otherwise just print to stderr
         if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
             try:
-                subprocess.run(
-                    ["notify-send", "WallShuffle Error", message],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
+                subprocess.run(["notify-send", "WallShuffle Error", message], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except FileNotFoundError:
                 print(f"ERROR: {message} (notify-send not found)", file=sys.stderr)
         else:
@@ -69,30 +64,28 @@ def log_wallpaper_history(image_path):
             try:
                 # Acquire exclusive lock
                 fcntl.flock(f, fcntl.LOCK_EX)
-                
+
                 content = f.read()
                 history = content.splitlines() if content else []
-                
+
                 if image_path in history:
                     history.remove(image_path)
                 history.insert(0, image_path)
                 history = history[:20]
-                
+
                 # Rewind and truncate
                 f.seek(0)
                 f.truncate()
                 f.write("\n".join(history))
-                
+
             finally:
                 # Release lock
                 fcntl.flock(f, fcntl.LOCK_UN)
-                
+
     except IOError as e:
         logging.error(f"File I/O error while logging wallpaper history: {e}")
     except Exception as e:
-        logging.critical(
-            f"An unhandled error occurred in log_wallpaper_history: {e}", exc_info=True
-        )
+        logging.critical(f"An unhandled error occurred in log_wallpaper_history: {e}", exc_info=True)
 
 
 def check_systemd_available():
@@ -129,9 +122,7 @@ def check_systemd_available():
             logging.debug("systemd user session is accessible via list-units")
             return True
         else:
-            logging.warning(
-                f"systemd user session verify failed (exit code: {result.returncode}, stderr: {result.stderr.strip()})"
-            )
+            logging.warning(f"systemd user session verify failed (exit code: {result.returncode}, stderr: {result.stderr.strip()})")
             return False
 
     except subprocess.TimeoutExpired:

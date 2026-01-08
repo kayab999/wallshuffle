@@ -1,12 +1,13 @@
 import logging
 import os
-import shutil
 import sys
 import threading
 
 import gi
 
+from . import __version__
 from .core import WallpaperUpdateResult, change_wallpaper
+from .online_sources import OnlineSourceManager
 from .themes import THEMES
 from .utils import CONFIG_DIR, show_error_dialog
 from .wallpaper_manager import WallpaperManager
@@ -42,12 +43,17 @@ def _find_executable_for_systemd():
 
 class WallpaperAppWindow(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
-        logging.debug("WallpaperAppWindow init called")
+        logging.debug(f"WallpaperAppWindow init started. kwargs keys: {list(kwargs.keys())}")
         self.app = kwargs.pop("app", None)
         self.is_de_supported = kwargs.pop("is_de_supported", False)
+        logging.info(f"UI received is_de_supported: {self.is_de_supported}")
         self.is_systemd_available = kwargs.pop("is_systemd_available", False)
+
+        logging.debug("Calling super().__init__")
         super().__init__(*args, **kwargs)
-        self.set_title("Wallshuffle")
+        logging.debug("super().__init__ completed")
+
+        self.set_title(f"WallShuffle v{__version__}")
         self.set_default_size(700, 700)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.set_border_width(15)
@@ -57,23 +63,30 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.wallpaper_manager = WallpaperManager()
         self.theme_manager = self.app.theme_manager
 
+        logging.debug("Calling init_ui")
         self.init_ui()
+        logging.debug("init_ui completed")
 
         # Load settings and apply initial state
+        logging.debug("Loading settings")
         self.load_settings()
+        logging.debug("Updating current wallpaper label")
         self.update_current_wallpaper_label()
+        logging.debug("Updating image count")
         self.update_image_count()
 
         self.connect("delete-event", self.on_delete_event)
 
         if self.app.css_provider:
-            self.get_style_context().add_provider(
-                self.app.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-            )
+            logging.debug("Applying CSS provider")
+            self.get_style_context().add_provider(self.app.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
+        logging.debug("Calling show_all")
         self.show_all()
+
         # Initial visibility check based on source
         self.on_source_changed(self.combo_source)
+        logging.info("WallpaperAppWindow initialization successful")
 
     def on_delete_event(self, widget, event):
         self.hide()
@@ -96,11 +109,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.info_bar_de = Gtk.InfoBar()
         self.info_bar_de.set_message_type(Gtk.MessageType.WARNING)
         content_area = self.info_bar_de.get_content_area()
-        content_area.add(
-            Gtk.Label(
-                "Your desktop environment is not officially supported for automatic wallpaper changes. Wallshuffle might not work correctly."
-            )
-        )
+        content_area.add(Gtk.Label(label="Your desktop environment is not officially supported for automatic wallpaper changes. Wallshuffle might not work correctly."))
         self.info_bar_de.show_all()
         self.info_bar_de.set_visible(not self.is_de_supported)
         main_vbox.pack_start(self.info_bar_de, False, False, 0)
@@ -133,8 +142,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             lbl_sched_icon = Gtk.Label(label="⚠️")
             lbl_sched = Gtk.Label(label="Automatic Scheduling: Unavailable (Systemd not detected)")
             lbl_sched.set_tooltip_text(
-                "Automatic scheduling requires systemd, which was not found on this system.\n"
-                "You can still change wallpapers manually using the 'Next Wallpaper' button."
+                "Automatic scheduling requires systemd, which was not found on this system.\nYou can still change wallpapers manually using the 'Next Wallpaper' button."
             )
         lbl_sched.set_halign(Gtk.Align.START)
         grid_status.attach(lbl_sched_icon, 0, 1, 1, 1)
@@ -248,9 +256,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         lbl_bg_color.set_halign(Gtk.Align.START)
         self.btn_color = Gtk.ColorButton()
         self.btn_color.set_title("Select Background Color")
-        self.btn_color.set_tooltip_text(
-            "Sets the background color for 'Centered' or 'Scaled' modes where the image doesn't fill the screen."
-        )
+        self.btn_color.set_tooltip_text("Sets the background color for 'Centered' or 'Scaled' modes where the image doesn't fill the screen.")
 
         lbl_multi = Gtk.Label(label="Multi-Monitor:")
         lbl_multi.set_halign(Gtk.Align.START)
@@ -293,9 +299,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Row 1: Interval
         row_interval = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         lbl_interval = Gtk.Label(label="Change Every:")
-        adjustment = Gtk.Adjustment(
-            value=30, lower=0, upper=10080, step_increment=1, page_increment=10
-        )
+        adjustment = Gtk.Adjustment(value=30, lower=0, upper=10080, step_increment=1, page_increment=10)
         self.spin_interval = Gtk.SpinButton()
         self.spin_interval.set_adjustment(adjustment)
         self.spin_interval.set_numeric(True)
@@ -308,7 +312,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Row 2: Checkboxes
         row_checks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         self.check_startup = Gtk.CheckButton(label="Change on startup")
-        
+
         row_checks.pack_start(self.check_startup, False, False, 0)
 
         schedule_box.pack_start(row_interval, False, False, 0)
@@ -354,9 +358,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         vbox_details.pack_start(self.entry_current_path, False, False, 0)
 
         self.btn_apply_now = Gtk.Button(label="Apply Now")
-        self.btn_apply_now.set_image(
-            Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
-        )
+        self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
         self.btn_apply_now.set_always_show_image(True)
         self.btn_apply_now.connect("clicked", self.on_next_wallpaper_clicked)
         self.btn_apply_now.set_halign(Gtk.Align.START)
@@ -421,10 +423,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         else:
             try:
                 for f in os.listdir(path):
-                    if (
-                        os.path.isfile(os.path.join(path, f))
-                        and os.path.splitext(f)[1].lower() in extensions
-                    ):
+                    if os.path.isfile(os.path.join(path, f)) and os.path.splitext(f)[1].lower() in extensions:
                         count += 1
             except OSError:
                 pass
@@ -439,9 +438,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 # Run in thread to avoid freezing UI on large folders
                 def count_thread():
                     count = self.count_local_images(path, recursive)
-                    GLib.idle_add(
-                        lambda: self.lbl_source_status.set_text(f"✓ {count} images found")
-                    )
+                    GLib.idle_add(lambda: self.lbl_source_status.set_text(f"✓ {count} images found"))
 
                 threading.Thread(target=count_thread, daemon=True).start()
             else:
@@ -476,9 +473,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         if self.app and hasattr(self.app, "theme_manager"):
             current_theme_name = self.app.theme_manager.current_theme_name
 
-        self.combo_theme.set_active(
-            list(THEMES.keys()).index(current_theme_name) if current_theme_name in THEMES else 0
-        )
+        self.combo_theme.set_active(list(THEMES.keys()).index(current_theme_name) if current_theme_name in THEMES else 0)
 
         def on_theme_changed(cb):
             text = cb.get_active_text()
@@ -515,25 +510,23 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.btn_test_unsplash.set_visible(not is_local)
 
         if not is_local:
-            unsplash_api_key = self.config_manager.get_setting(
-                self.config, "Settings", "unsplash_api_key", "YOUR_UNSPLASH_API_KEY"
-            )
+            unsplash_api_key = self.config_manager.get_setting(self.config, "Settings", "unsplash_api_key", "YOUR_UNSPLASH_API_KEY")
             if unsplash_api_key and unsplash_api_key != "YOUR_UNSPLASH_API_KEY":
                 # Maybe auto-fill or handle logic
                 pass
 
     def on_test_unsplash_clicked(self, widget):
         api_key = self.entry_unsplash_api_key.get_text()
-        
+
         # Show loading cursor or disable button
         self.btn_test_unsplash.set_sensitive(False)
         self.btn_test_unsplash.set_label("Testing...")
-        
+
         def run_test():
             # Use OnlineSourceManager logic
             source_manager = OnlineSourceManager(self.config_manager, self.config)
             success, message = source_manager.test_api_connection(api_key)
-            
+
             GLib.idle_add(self._on_test_complete, success, message)
 
         threading.Thread(target=run_test, daemon=True).start()
@@ -541,7 +534,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
     def _on_test_complete(self, success, message):
         self.btn_test_unsplash.set_sensitive(True)
         self.btn_test_unsplash.set_label("Test Connection")
-        
+
         dialog_type = Gtk.MessageType.INFO if success else Gtk.MessageType.ERROR
         dialog = Gtk.MessageDialog(
             transient_for=self,
@@ -562,11 +555,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 self.combo_source.set_active(self.sources.index(source))
 
             self.entry_folder.set_text(settings.get("folder", ""))
-            self.check_recursive.set_active(
-                self.config_manager.get_setting(
-                    self.config, "Settings", "recursive_search", False, value_type=bool
-                )
-            )
+            self.check_recursive.set_active(self.config_manager.get_setting(self.config, "Settings", "recursive_search", False, value_type=bool))
             self.entry_keywords.set_text(settings.get("keywords", ""))
 
             unsplash_api_key = settings.get("unsplash_api_key", "")
@@ -578,16 +567,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             if mode in self.modes:
                 self.combo_mode.set_active(self.modes.index(mode))
 
-            self.spin_interval.set_value(
-                self.config_manager.get_setting(
-                    self.config, "Settings", "interval", 30, value_type=int
-                )
-            )
-            self.check_startup.set_active(
-                self.config_manager.get_setting(
-                    self.config, "Settings", "startup", False, value_type=bool
-                )
-            )
+            self.spin_interval.set_value(self.config_manager.get_setting(self.config, "Settings", "interval", 30, value_type=int))
+            self.check_startup.set_active(self.config_manager.get_setting(self.config, "Settings", "startup", False, value_type=bool))
 
             effect = settings.get("effect", "None")
             if effect in self.effects:
@@ -595,9 +576,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
             multi_monitor_mode = settings.get("multi_monitor_mode", "Single image on all monitors")
             if multi_monitor_mode in self.multi_monitor_modes:
-                self.combo_multi_monitor.set_active(
-                    self.multi_monitor_modes.index(multi_monitor_mode)
-                )
+                self.combo_multi_monitor.set_active(self.multi_monitor_modes.index(multi_monitor_mode))
 
             bg_color_str = settings.get("background_color", "#000000")
             color = Gdk.RGBA()
@@ -605,9 +584,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 self.btn_color.set_rgba(color)
 
     def on_browse_clicked(self, widget):
-        dialog = Gtk.FileChooserDialog(
-            title="Choose a folder or file", parent=self, action=Gtk.FileChooserAction.OPEN
-        )
+        dialog = Gtk.FileChooserDialog(title="Choose a folder or file", parent=self, action=Gtk.FileChooserAction.OPEN)
         dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK)
 
         # Allow selecting folders OR files?
@@ -727,9 +704,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         theme = self.combo_theme.get_active_text()
 
         bg_color = self.btn_color.get_rgba()
-        hex_color = "#{:02x}{:02x}{:02x}".format(
-            int(bg_color.red * 255), int(bg_color.green * 255), int(bg_color.blue * 255)
-        )
+        hex_color = "#{:02x}{:02x}{:02x}".format(int(bg_color.red * 255), int(bg_color.green * 255), int(bg_color.blue * 255))
 
         settings_dict = {
             "source": source,
@@ -810,19 +785,13 @@ WantedBy=timers.target
             show_error_dialog(f"File I/O error setting up systemd timer files: {e}", self)
             return
         except Exception as e:
-            logging.critical(
-                f"An unhandled error occurred during systemd file setup: {e}", exc_info=True
-            )
+            logging.critical(f"An unhandled error occurred during systemd file setup: {e}", exc_info=True)
             show_error_dialog(f"An unhandled error occurred during systemd file setup: {e}", self)
             return
 
         try:
-            if not self.wallpaper_manager._run_subprocess(
-                ["systemctl", "--user", "daemon-reload"], "daemon-reload"
-            ):
-                show_error_dialog(
-                    "Failed to run systemctl daemon-reload. Check logs for details.", self
-                )
+            if not self.wallpaper_manager._run_subprocess(["systemctl", "--user", "daemon-reload"], "daemon-reload"):
+                show_error_dialog("Failed to run systemctl daemon-reload. Check logs for details.", self)
                 return
 
             if interval > 0 or startup:
@@ -830,21 +799,13 @@ WantedBy=timers.target
                     ["systemctl", "--user", "enable", "--now", "wallpaper-changer.timer"],
                     "enable timer",
                 ):
-                    show_error_dialog(
-                        "Failed to enable systemd timer. Check logs for details.", self
-                    )
+                    show_error_dialog("Failed to enable systemd timer. Check logs for details.", self)
             else:
                 if not self.wallpaper_manager._run_subprocess(
                     ["systemctl", "--user", "disable", "--now", "wallpaper-changer.timer"],
                     "disable timer",
                 ):
-                    show_error_dialog(
-                        "Failed to disable systemd timer. Check logs for details.", self
-                    )
+                    show_error_dialog("Failed to disable systemd timer. Check logs for details.", self)
         except Exception as e:
-            logging.critical(
-                f"An unhandled error occurred during systemctl interaction: {e}", exc_info=True
-            )
-            show_error_dialog(
-                f"An unhandled error occurred during systemctl interaction: {e}", self
-            )
+            logging.critical(f"An unhandled error occurred during systemctl interaction: {e}", exc_info=True)
+            show_error_dialog(f"An unhandled error occurred during systemctl interaction: {e}", self)

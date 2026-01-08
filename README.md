@@ -33,19 +33,25 @@ pip install -e . --user
 
 ## Installation
 
-The easiest way to get started is by using the included installation script.
+### Method 1: Installer Script (Recommended)
+The easiest way to get started:
+```bash
+./install.sh
+```
 
-1.  **Download:** Clone the repository or download the release.
-2.  **Install:**
-    ```bash
-    ./install.sh
-    ```
-    This script will:
-    - Copy the AppImage to `~/Applications`.
-    - Create a wrapper script in `~/.local/bin/wallshuffle` (so you can run `wallshuffle` from anywhere).
-    - Add a desktop entry so it appears in your application menu.
+### Method 2: Python Package (RC / Developers)
+You can install WallShuffle directly from the source:
+```bash
+pip install -e .
+```
 
-Alternatively, you can manually download the `WallShuffle-x86_64.AppImage` and run it directly.
+---
+
+## Troubleshooting
+
+- **Wayland Compatibility:** If you are running a Wayland session (common in Ubuntu 22.04+), WallShuffle automatically forces the **X11 backend (via XWayland)** to ensure the GTK3 interface renders correctly and remains visible. This is handled internally.
+- **Systemd Dependency:** Wallshuffle uses `systemd` timers for scheduling. This will not work on non-systemd distros (e.g., Devuan, Artix).
+- **libfuse2:** AppImages require `libfuse2`. If the app won't start, run: `sudo apt install libfuse2`.
 
 ## Usage
 

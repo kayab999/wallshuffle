@@ -3,4 +3,5 @@ Name=WallShuffle
 Exec=wallshuffle
 Icon=wallshuffle
 Type=Application
+StartupWMClass=WallShuffle
 Categories=Utility;

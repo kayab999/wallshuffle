@@ -58,7 +58,7 @@ class WallpaperApp(Gtk.Application):
         # Perform environment checks immediately in __init__
         # This prevents race conditions where the window is created (using defaults)
         # before do_startup() runs.
-        
+
         # Quick DE detection with retry logic for robustness on startup
         current_de = "unknown"
         for attempt in range(5):
@@ -67,30 +67,23 @@ class WallpaperApp(Gtk.Application):
                 break
             self.logger.warning(f"DE detection failed (attempt {attempt + 1}/5). Retrying in 2s...")
             time.sleep(2)
-        
+
         # GNOME-compatible environments list (must match wallpaper_manager.py)
-        gnome_compat = [
-            "gnome", "unity", "ubuntu", "cinnamon", "budgie", "mate", "pantheon", "pop"
-        ]
-        
+        gnome_compat = ["gnome", "unity", "ubuntu", "cinnamon", "budgie", "mate", "pantheon", "pop"]
+
         if current_de in gnome_compat or current_de in ["kde", "xfce"]:
             self.is_de_supported = True
             self.logger.info(f"Desktop Environment: {current_de} (Supported)")
         else:
             self.is_de_supported = False
-            self.logger.warning(
-                f"Desktop Environment: '{current_de}' (Unsupported). "
-                "Wallpaper functionality may not work correctly."
-            )
+            self.logger.warning(f"Desktop Environment: '{current_de}' (Unsupported). Wallpaper functionality may not work correctly.")
 
         self.is_systemd_available = check_systemd_available()
 
         self.logger.info(f"DE Supported: {self.is_de_supported}")
         self.logger.info(f"Systemd Available: {self.is_systemd_available}")
 
-        self.theme_manager = ThemeManager(
-            self.config_manager, self.config
-        )
+        self.theme_manager = ThemeManager(self.config_manager, self.config)
         self.logger.debug("ThemeManager initialized")
 
     def _signal_handler(self, signum, frame):
@@ -135,22 +128,16 @@ class WallpaperApp(Gtk.Application):
                             # Send signal 0 to check if process exists (doesn't actually send signal)
                             os.kill(pid, 0)
                             # Process exists, lock is NOT stale
-                            self.logger.info(
-                                f"Lock file contains running process PID {pid}, not stale"
-                            )
+                            self.logger.info(f"Lock file contains running process PID {pid}, not stale")
                             return False
                         except ProcessLookupError:
                             # Process doesn't exist, lock is stale
-                            self.logger.warning(
-                                f"Lock file contains dead process PID {pid}, treating as stale"
-                            )
+                            self.logger.warning(f"Lock file contains dead process PID {pid}, treating as stale")
                             return True
                         except PermissionError:
                             # Process exists but we don't have permission to signal it
                             # This means it's a real running process
-                            self.logger.info(
-                                f"Lock file contains process PID {pid} (permission denied), not stale"
-                            )
+                            self.logger.info(f"Lock file contains process PID {pid} (permission denied), not stale")
                             return False
                     except ValueError:
                         # Invalid PID in lock file, check by age
@@ -162,10 +149,7 @@ class WallpaperApp(Gtk.Application):
             age_hours = age_seconds / 3600
 
             if age_hours > max_age_hours:
-                self.logger.warning(
-                    f"Lock file is {age_hours:.1f}h old (threshold: {max_age_hours}h), "
-                    "treating as stale"
-                )
+                self.logger.warning(f"Lock file is {age_hours:.1f}h old (threshold: {max_age_hours}h), treating as stale")
                 return True
         except OSError as e:
             self.logger.error(f"Error checking lock file age: {e}")
@@ -228,10 +212,7 @@ class WallpaperApp(Gtk.Application):
                 except Exception:
                     pass
 
-                self.logger.warning(
-                    f"Another instance is running (PID {existing_pid}). "
-                    f"Sending SIGUSR1 to activate it."
-                )
+                self.logger.warning(f"Another instance is running (PID {existing_pid}). Sending SIGUSR1 to activate it.")
 
                 # Send signal to existing process to wake it up
                 if existing_pid and existing_pid.isdigit():
@@ -240,7 +221,7 @@ class WallpaperApp(Gtk.Application):
                         self.logger.info(f"Sent SIGUSR1 to process {existing_pid}")
                     except OSError as e:
                         self.logger.error(f"Failed to signal existing process {existing_pid}: {e}")
-                
+
                 # Clean up fd
                 if self.lock_file_fd is not None:
                     try:
@@ -299,6 +280,10 @@ class WallpaperApp(Gtk.Application):
         self.css_provider = self.theme_manager.get_css_provider()
         self.create_status_icon()
 
+        # Force window activation on startup if not running in change-only mode
+        # This ensures visibility even if the OS doesn't send the 'activate' signal
+        GLib.timeout_add(100, self.do_activate)
+
     def do_activate(self):
         self.logger.debug("do_activate called")
         if not self.win:
@@ -309,11 +294,15 @@ class WallpaperApp(Gtk.Application):
                 is_de_supported=self.is_de_supported,
                 is_systemd_available=self.is_systemd_available,
             )
-        
+            if self.win:
+                self.win.present()
+
         # Ensure window is visible and presented
-        self.win.show()
-        self.win.deiconify()  # Unminimize if minimized
-        self.win.present()    # Move to front/focus
+        if self.win:
+            self.win.show_all()
+            self.win.deiconify()  # Unminimize if minimized
+            self.win.present()
+            self.win.present_with_time(Gtk.get_current_event_time())
 
     def create_status_icon(self):
         self.logger.debug("create_status_icon called.")
@@ -368,9 +357,7 @@ class WallpaperApp(Gtk.Application):
                 "/usr/share/wallshuffle/icon.png",  # Alternative location
                 "/usr/local/share/pixmaps/wallshuffle.png",  # Local install
                 os.path.join(module_dir, "icon.png"),  # Package internal
-                os.path.expanduser(
-                    "~/.local/share/icons/hicolor/scalable/apps/wallshuffle.png"
-                ),  # User install
+                os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/wallshuffle.png"),  # User install
             ]
 
             self.logger.debug(f"Searching for icon in {len(search_paths)} locations...")
@@ -382,15 +369,11 @@ class WallpaperApp(Gtk.Application):
                     break
 
             if not icon_path:
-                self.logger.warning(
-                    f"Icon file not found in any of {len(search_paths)} search paths"
-                )
+                self.logger.warning(f"Icon file not found in any of {len(search_paths)} search paths")
                 self.logger.debug(f"Searched: {', '.join(search_paths)}")
 
         try:
-            self.status_icon = AppIndicator3.Indicator.new(
-                indicator_id, "wallshuffle", AppIndicator3.IndicatorCategory.APPLICATION_STATUS
-            )
+            self.status_icon = AppIndicator3.Indicator.new(indicator_id, "wallshuffle", AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
             self.logger.debug("AppIndicator3.Indicator.new called successfully.")
 
             self.status_icon.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -478,9 +461,7 @@ class WallpaperApp(Gtk.Application):
             thread = threading.Thread(target=change_and_update, daemon=True)
             thread.start()
         except Exception as e:
-            self.logger.critical(
-                f"Error starting wallpaper change thread from indicator: {e}", exc_info=True
-            )
+            self.logger.critical(f"Error starting wallpaper change thread from indicator: {e}", exc_info=True)
             if hasattr(self, "menu_item_next"):
                 self.menu_item_next.set_sensitive(True)  # Re-enable on thread start failure
 

@@ -42,9 +42,7 @@ def change_wallpaper():
 
     source = config_manager.get_setting(config, "Settings", "source", "Local Folder")
     effect = config_manager.get_setting(config, "Settings", "effect", "None")
-    multi_monitor_mode = config_manager.get_setting(
-        config, "Settings", "multi_monitor_mode", "Single image on all monitors"
-    )
+    multi_monitor_mode = config_manager.get_setting(config, "Settings", "multi_monitor_mode", "Single image on all monitors")
     image_path = None
 
     logging.info(f"Source: {source}, Effect: {effect}, Multi-Monitor Mode: {multi_monitor_mode}")
@@ -66,9 +64,7 @@ def change_wallpaper():
         elif os.path.isdir(folder):
             try:
                 supported_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-                recursive_search = config_manager.get_setting(
-                    config, "Settings", "recursive_search", False, value_type=bool
-                )
+                recursive_search = config_manager.get_setting(config, "Settings", "recursive_search", False, value_type=bool)
 
                 images = []
                 if recursive_search:
@@ -77,19 +73,13 @@ def change_wallpaper():
                             if f.lower().endswith(supported_extensions):
                                 images.append(os.path.join(root, f))
                 else:
-                    images = [
-                        os.path.join(folder, f)
-                        for f in os.listdir(folder)
-                        if f.lower().endswith(supported_extensions)
-                    ]
+                    images = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(supported_extensions)]
 
                 if images:
                     image_path = random.choice(images)
                     logging.info(f"Selected image: {image_path}")
                 else:
-                    logging.warning(
-                        f"No images found in folder: {folder} (Recursive: {recursive_search})"
-                    )
+                    logging.warning(f"No images found in folder: {folder} (Recursive: {recursive_search})")
                     return WallpaperUpdateResult.NO_IMAGES_FOUND
             except OSError as e:
                 logging.error(f"Error accessing local folder {folder}: {e}")

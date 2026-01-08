@@ -95,12 +95,16 @@ fi
 # 2. Try AppImage in ~/Applications
 APPIMAGE_HOME="$HOME/Applications/WallShuffle.AppImage"
 if [ -x "$APPIMAGE_HOME" ]; then
-  exec "$APPIMAGE_HOME" "$@"
+  # Use a direct call instead of 'exec' to ensure environment variables are inherited
+  "$APPIMAGE_HOME" "$@"
+  exit $?
 fi
 
 # 3. As a last resort, try APPIMAGE env (if running inside another AppImage)
 if [ -n "${APPIMAGE:-}" ] && [ -x "$APPIMAGE" ]; then
-  exec "$APPIMAGE" "$@"
+  # Use a direct call here as well
+  "$APPIMAGE" "$@"
+  exit $?
 fi
 
 echo "Wallshuffle: no executable found. Please install Wallshuffle or place the AppImage in ~/Applications."
