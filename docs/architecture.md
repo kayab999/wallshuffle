@@ -1,4 +1,8 @@
-# 🏛️ KAYAB v4.0 "GENESIS" - Arquitectura Pragmática Escalable
+# 🏛️ KAYAB v4.0 "GENESIS" - Mark VII Runtime Kernel
+
+## 📚 Theoretical Context
+This architecture represents the **Phase 3 (Heuristic Implementation)** of the broader **Kayab Mark VII** framework.
+For full theoretical background, see: `docs/KAYAB_MARK_VII.md`.
 
 ## 📜 Filosofía del Diseño: El Principio del Roble
 "El roble más fuerte no fue el más alto desde el principio, sino la semilla que arraigó correctamente."
