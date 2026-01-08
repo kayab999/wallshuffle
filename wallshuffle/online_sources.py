@@ -1,9 +1,14 @@
 import datetime
+import hashlib
 import json
 import logging
 import os
+import shutil
+import time
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .utils import CONFIG_DIR, show_error_dialog
 
@@ -23,6 +28,20 @@ class OnlineSourceManager:
         self.config = config
         os.makedirs(CACHE_DIR, exist_ok=True)
         self.session = self._create_resilient_session()
+
+    def _create_resilient_session(self):
+        """Creates a requests Session with retries and timeout defaults."""
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def _check_circuit_breaker(self):
         """Check if we are in a cooldown period."""
@@ -47,6 +66,49 @@ class OnlineSourceManager:
     def _record_success(self):
         OnlineSourceManager._consecutive_failures = 0
         OnlineSourceManager._last_failure_time = None
+
+    def _get_cache_key(self, keywords):
+        """Generates a unique filename for the cache based on keywords."""
+        safe_keywords = keywords.replace(" ", "_") if keywords else "random"
+        # Combine keywords with date (daily rotation) to ensure freshness
+        date_str = datetime.date.today().isoformat()
+        key_str = f"{safe_keywords}_{date_str}"
+        return hashlib.md5(key_str.encode()).hexdigest() + ".jpg"
+
+    def _get_cached_image(self, keywords):
+        """Returns path to valid cached image if available, else None."""
+        filename = self._get_cache_key(keywords)
+        cache_path = os.path.join(CACHE_DIR, filename)
+
+        if os.path.exists(cache_path):
+            # Check expiration
+            file_time = os.path.getmtime(cache_path)
+            age_hours = (time.time() - file_time) / 3600
+            
+            if age_hours < CACHE_EXPIRATION_HOURS:
+                logging.info(f"Using cached Unsplash image: {cache_path}")
+                return cache_path
+            else:
+                logging.debug("Cached image expired.")
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+        
+        return None
+
+    def _save_image_to_cache(self, image_data, keywords):
+        """Saves downloaded image data to cache directory."""
+        filename = self._get_cache_key(keywords)
+        cache_path = os.path.join(CACHE_DIR, filename)
+        try:
+            with open(cache_path, "wb") as f:
+                f.write(image_data)
+            
+            # Clean up old cache files occasionally?
+            # For now, let's keep it simple.
+        except IOError as e:
+            logging.error(f"Failed to save image to cache: {e}")
 
     def fetch_unsplash_wallpaper(self, keywords):
         # First, try to get from cache

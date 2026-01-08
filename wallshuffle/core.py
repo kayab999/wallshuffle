@@ -113,8 +113,13 @@ def change_wallpaper():
     if multi_monitor_mode == "Span image across all monitors":
         logging.info("Creating composite image for span mode.")
         image_path = manager.create_composite_image(image_path, monitor_info)
+        # Force 'spanned' mode so the DE knows to stretch this composite image across all screens
+        logging.info("Forcing mode to 'spanned' for multi-monitor composite image.")
+        mode = "spanned"
+    else:
+        # Only load user preference if NOT spanning
+        mode = config_manager.get_setting(config, "Settings", "mode", "zoom")
 
-    mode = config_manager.get_setting(config, "Settings", "mode", "zoom")
     background_color = config_manager.get_setting(config, "Settings", "background_color", "#000000")
 
     logging.info(f"Applying wallpaper with mode: {mode} and background color: {background_color}")

@@ -226,14 +226,12 @@ class WallpaperManager:
         
         return True
 
-    def apply_kde_settings(self, mode, image_paths=None, background_color=None):
-        if not image_paths:
-            return True
-            
+    def _generate_kde_script(self, image_path, mode):
+        """Generates the JavaScript payload for KDE Plasma."""
         fill_mode = self.KDE_FILL_MODES.get(mode, 1) # Default to Fit (Scaled)
-        safe_path = shlex.quote(f"file://{image_paths[0]}")
+        safe_path = shlex.quote(f"file://{image_path}")
 
-        script = f"""
+        return f"""
             var allDesktops = desktops();
             for (var i=0; i<allDesktops.length; i++) {{
                 var d = allDesktops[i];
@@ -243,6 +241,12 @@ class WallpaperManager:
                 d.writeConfig('FillMode', {fill_mode});
             }}
         """
+
+    def apply_kde_settings(self, mode, image_paths=None, background_color=None):
+        if not image_paths:
+            return True
+        
+        script = self._generate_kde_script(image_paths[0], mode)
         return self._run_subprocess([
             "dbus-send", "--session", "--dest=org.kde.plasmashell", "--type=method_call",
             "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script
