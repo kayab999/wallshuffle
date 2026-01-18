@@ -1,4 +1,2 @@
+recursive-include wallshuffle/assets *
 include README.md
-include LICENSE
-include icon.png
-recursive-include wallshuffle *.py

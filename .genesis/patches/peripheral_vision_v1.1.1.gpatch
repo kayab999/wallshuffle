@@ -1,0 +1,5 @@
+[Patch: Peripheral-Vision-Protocol]
+Target: GENESIS_CORE/ReasoningEngine
+Description: Closes blindspot in dependency analysis
+Implementation: Requires full cross-repo grep + AST parse before mutation
+Risk-Reduction: Estimated 68% reduction in signature-mismatch errors

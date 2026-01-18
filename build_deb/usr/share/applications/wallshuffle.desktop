@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=WallShuffle
+Comment=Wallpaper Changer for Linux
+Exec=wallshuffle
+Icon=wallshuffle
+Type=Application
+Categories=Utility;Settings;DesktopSettings;
+Terminal=false
+StartupNotify=true

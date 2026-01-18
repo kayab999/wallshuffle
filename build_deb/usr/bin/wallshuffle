@@ -1,0 +1,3 @@
+#!/bin/bash
+export PYTHONPATH="/usr/share/wallshuffle"
+exec python3 -m wallshuffle "$@"

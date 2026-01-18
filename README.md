@@ -33,17 +33,43 @@ pip install -e . --user
 
 ## Installation
 
-### Method 1: Installer Script (Recommended)
-The easiest way to get started:
+### Method 1: AppImage (Recommended)
+The **AppImage** is a single executable file that runs on most Linux distributions.
+
+1.  **Download** the latest `WallShuffle-x86_64.AppImage` from the [Releases page](#).
+2.  **Make it executable:**
+    ```bash
+    chmod +x WallShuffle-x86_64.AppImage
+    ```
+3.  **Run it:** Double-click the file or run `./WallShuffle-x86_64.AppImage`.
+
+*Note for Ubuntu 22.04+ users:* If the AppImage does not start, install `libfuse2`:
 ```bash
+sudo apt update && sudo apt install libfuse2
+```
+
+### Method 2: Debian Package (.deb)
+For Debian, Ubuntu, Linux Mint, and derivatives:
+
+1.  **Download** the `wallshuffle_1.0.0_all.deb` file.
+2.  **Install** via terminal:
+    ```bash
+    sudo apt install ./wallshuffle_1.0.0_all.deb
+    ```
+    (Using `apt` instead of `dpkg` automatically handles dependencies like `python3-gi`).
+
+### Method 3: From Source (Developers)
+```bash
+git clone https://github.com/carlos/wallshuffle.git
+cd wallshuffle
 ./install.sh
 ```
 
-### Method 2: Python Package (RC / Developers)
-You can install WallShuffle directly from the source:
-```bash
-pip install -e .
-```
+## Usage
+
+**Launch:**
+- If installed via AppImage: Double-click the file.
+- If installed via `.deb` or source: Search for **WallShuffle** in your application menu.
 
 ---
 
