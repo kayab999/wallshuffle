@@ -10,7 +10,7 @@ import time
 
 import gi
 
-from .config_manager import ConfigManager
+from .config_manager import get_config_manager
 from .core import WallpaperUpdateResult, change_wallpaper
 from .theme_manager import ThemeManager
 from .ui import WallpaperAppWindow
@@ -28,7 +28,7 @@ from gi.repository import Gio, GLib, Gtk
 
 
 class WallpaperApp(Gtk.Application):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: any, **kwargs: any) -> None:
         super().__init__(
             *args,
             application_id="com.wallshuffle.app",
@@ -50,7 +50,7 @@ class WallpaperApp(Gtk.Application):
         signal.signal(signal.SIGHUP, self._signal_handler)
 
         self.logger.debug("Initializing ThemeManager in WallpaperApp.__init__")
-        self.config_manager = ConfigManager()
+        self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
 
@@ -79,7 +79,7 @@ class WallpaperApp(Gtk.Application):
         self.theme_manager = ThemeManager(self.config_manager, self.config)
         self.logger.debug("ThemeManager initialized")
 
-    def _clean_temp_dir(self):
+    def _clean_temp_dir(self) -> None:
         """Cleans up temporary files from previous sessions."""
         try:
             temp_dir = os.path.join(CONFIG_DIR, "temp")
@@ -90,7 +90,7 @@ class WallpaperApp(Gtk.Application):
         except Exception as e:
             self.logger.warning(f"Failed to clean temp directory: {e}")
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum: int, frame: any) -> None:
         """Handle termination signals gracefully."""
         # Use low-level write to avoid re-entrant logging issues in signal handlers
         msg = f"Received signal {signum}, cleaning up...\n"
@@ -347,13 +347,13 @@ class WallpaperApp(Gtk.Application):
         menu.show_all()
         return menu
 
-    def _send_notification(self, title, body):
+    def _send_notification(self, title: str, body: str) -> None:
         notification = Gio.Notification.new(title)
         notification.set_body(body)
         notification.set_default_action("app.activate")
         self.send_notification("wallshuffle-notification", notification)
 
-    def _handle_change_result(self, result):
+    def _handle_change_result(self, result: WallpaperUpdateResult) -> None:
         """Handles the result from change_wallpaper on the main GTK thread."""
         if result == WallpaperUpdateResult.SUCCESS:
             if self.win:

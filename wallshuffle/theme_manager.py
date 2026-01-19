@@ -62,6 +62,31 @@ class ThemeManager:
     color: {theme["foreground"]};
 }}
 
+/* Titles */
+.title-2 {{
+    font-weight: bold;
+    font-size: 1.2em;
+    margin-bottom: 10px;
+    color: {theme["accent"]}; 
+}}
+
+/* Dim Labels */
+.dim-label {{
+    opacity: 0.7;
+    font-size: 0.9em;
+}}
+
+/* Flat Entries */
+entry.flat {{
+    min-height: 0;
+    padding: 2px;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    font-weight: bold;
+}}
+
+/* Standard Widgets */
 #wallshuffle-main-window GtkLabel {{
     color: {theme["foreground"]};
 }}
@@ -70,23 +95,42 @@ class ThemeManager:
     background-color: {theme["accent"]};
     color: {theme.get("button_text", theme["foreground"])};
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 4px 12px;
+    border: none;
+    font-weight: bold;
 }}
 
 #wallshuffle-main-window GtkButton:hover {{
-    box-shadow: 0 0 6px {theme["hover"]};
+    opacity: 0.9;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}}
+
+#wallshuffle-main-window GtkButton:active {{
+    opacity: 0.8;
+}}
+
+/* Suggested Action Button (Save) */
+.suggested-action {{
+    background-color: {theme.get("accent_secondary", theme["accent"])}; 
+    color: #ffffff;
 }}
 
 #wallshuffle-main-window GtkEntry {{
-    background-color: {theme["background"]};
+    background-color: rgba(255, 255, 255, 0.05);
     color: {theme["foreground"]};
     border: 1px solid {theme["accent"]};
+    border-radius: 4px;
+    padding: 4px;
 }}
 
 #wallshuffle-main-window GtkComboBox GtkEntry {{
-    background-color: {theme["background"]};
-    color: {theme["foreground"]};
+    background-color: transparent;
+    border: none;
 }}
+
+/* Hero Section Preview Box styling (if we could target it by ID or class) */
+/* Assuming we didn't add a specific class to the box itself, ensuring generic polish */
+
 """
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(css.encode("utf-8"))

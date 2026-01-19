@@ -55,15 +55,24 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         super().__init__(*args, **kwargs)
         logging.debug("super().__init__ completed")
 
-        self.set_title(f"WallShuffle v{__version__}")
         self.set_default_size(700, 700)
         self.set_position(Gtk.WindowPosition.CENTER)
-        self.set_border_width(15)
+        self.set_border_width(0) # Removed border width for modern look
         self.set_name("wallshuffle-main-window")
         self.config_manager = self.app.config_manager
         self.config = self.app.config
         self.wallpaper_manager = WallpaperManager()
         self.theme_manager = self.app.theme_manager
+
+        # Initialize data lists
+        self.sources = ["Local Folder", "Unsplash"]
+        self.modes = ["zoom", "scaled", "centered", "spanned", "stretched"]
+        self.effects = ["None", "Grayscale", "Blur", "Sepia"]
+        self.multi_monitor_modes = [
+            "Single image on all monitors",
+            "Different image on each monitor",
+            "Span image across all monitors",
+        ]
 
         logging.debug("Calling init_ui")
         self.init_ui()
@@ -87,8 +96,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         logging.debug("Window initialized (hidden)")
 
         # Initial visibility check based on source
-        self.on_source_changed(self.combo_source)
-        self.on_multi_monitor_changed(self.combo_multi_monitor)
+        # self.on_source_changed(self.combo_source) # Call this after UI is built
+        # self.on_multi_monitor_changed(self.combo_multi_monitor)
 
         logging.info("WallpaperAppWindow initialization successful")
 
@@ -102,322 +111,234 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         return False  # Propagate event
 
     def init_ui(self):
+        self._build_header_bar()
+
         # Main Layout: Scrolled Window
         scrolled_window = Gtk.ScrolledWindow()
         scrolled_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self.add(scrolled_window)
 
         main_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
-        main_vbox.set_margin_top(10)
-        main_vbox.set_margin_bottom(10)
-        main_vbox.set_margin_start(10)
-        main_vbox.set_margin_end(10)
+        main_vbox.set_margin_top(20)
+        main_vbox.set_margin_bottom(20)
+        main_vbox.set_margin_start(20)
+        main_vbox.set_margin_end(20)
         scrolled_window.add(main_vbox)
 
-        # InfoBar for Unsupported Desktop Environment
+        self._build_info_bar(main_vbox)
+        self._build_hero_section(main_vbox)
+        self._build_source_section(main_vbox)
+        self._build_settings_section(main_vbox)
+
+        # Apply restrictions
+        if not self.is_de_supported:
+            self._apply_de_restrictions()
+        if not self.is_systemd_available:
+            self._apply_systemd_restrictions()
+
+    def _build_header_bar(self):
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.set_title(f"WallShuffle v{__version__}")
+        self.set_titlebar(header)
+
+        self.btn_save = Gtk.Button(label="Save")
+        self.btn_save.get_style_context().add_class("suggested-action")
+        self.btn_save.connect("clicked", self.on_save_clicked)
+        header.pack_end(self.btn_save)
+
+        self.btn_apply_now = Gtk.Button(label="Next Wallpaper")
+        self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_apply_now.connect("clicked", self.on_next_wallpaper_clicked)
+        header.pack_start(self.btn_apply_now)
+
+    def _build_info_bar(self, parent):
         self.info_bar_de = Gtk.InfoBar()
         self.info_bar_de.set_message_type(Gtk.MessageType.WARNING)
         self.info_bar_de.set_no_show_all(True)
         content_area = self.info_bar_de.get_content_area()
-        content_area.add(Gtk.Label(label="Your desktop environment is not officially supported for automatic wallpaper changes. Wallshuffle might not work correctly."))
-        self.info_bar_de.show_all()
+        content_area.add(Gtk.Label(label="Your desktop environment is not officially supported."))
         self.info_bar_de.set_visible(not self.is_de_supported)
-        main_vbox.pack_start(self.info_bar_de, False, False, 0)
+        parent.pack_start(self.info_bar_de, False, False, 0)
 
-        # --- System Status ---
-        frame_status = Gtk.Frame(label="System Capabilities")
-        main_vbox.pack_start(frame_status, False, False, 0)
+    def _build_hero_section(self, parent):
+        hero_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        hero_box.set_halign(Gtk.Align.CENTER)
+        parent.pack_start(hero_box, False, False, 0)
 
-        grid_status = Gtk.Grid()
-        grid_status.set_column_spacing(10)
-        grid_status.set_row_spacing(5)
-        grid_status.set_margin_top(10)
-        grid_status.set_margin_bottom(10)
-        grid_status.set_margin_start(10)
-        grid_status.set_margin_end(10)
-        frame_status.add(grid_status)
-
-        # Manual Wallpaper Status
-        lbl_manual_icon = Gtk.Label(label="✅")
-        lbl_manual = Gtk.Label(label="Manual Wallpaper Change: Available")
-        lbl_manual.set_halign(Gtk.Align.START)
-        grid_status.attach(lbl_manual_icon, 0, 0, 1, 1)
-        grid_status.attach(lbl_manual, 1, 0, 1, 1)
-
-        # Scheduling Status
-        if self.is_systemd_available:
-            lbl_sched_icon = Gtk.Label(label="✅")
-            lbl_sched = Gtk.Label(label="Automatic Scheduling: Available")
-        else:
-            lbl_sched_icon = Gtk.Label(label="⚠️")
-            lbl_sched = Gtk.Label(label="Automatic Scheduling: Unavailable (Systemd not detected)")
-            lbl_sched.set_tooltip_text(
-                "Automatic scheduling requires systemd, which was not found on this system.\nYou can still change wallpapers manually using the 'Next Wallpaper' button."
-            )
-        lbl_sched.set_halign(Gtk.Align.START)
-        grid_status.attach(lbl_sched_icon, 0, 1, 1, 1)
-        grid_status.attach(lbl_sched, 1, 1, 1, 1)
-
-        # --- Section 1: Source Configuration ---
-        frame_source = Gtk.Frame(label="Source Configuration")
-        frame_source.get_label_widget().get_style_context().add_class("title-2")
-        main_vbox.pack_start(frame_source, False, False, 0)
-
-        grid_source = Gtk.Grid()
-        grid_source.set_column_spacing(15)
-        grid_source.set_row_spacing(10)
-        grid_source.set_margin_top(15)
-        grid_source.set_margin_bottom(15)
-        grid_source.set_margin_start(15)
-        grid_source.set_margin_end(15)
-        frame_source.add(grid_source)
-
-        lbl_source = Gtk.Label(label="Wallpaper Source:")
-        lbl_source.set_halign(Gtk.Align.START)
-        self.combo_source = Gtk.ComboBoxText()
-        self.sources = ["Local Folder", "Unsplash"]
-        for source in self.sources:
-            self.combo_source.append_text(source)
-        self.combo_source.connect("changed", self.on_source_changed)
-
-        # Source Status Indicator
-        self.lbl_source_status = Gtk.Label(label="")
-        self.lbl_source_status.set_halign(Gtk.Align.START)
-        self.lbl_source_status.get_style_context().add_class("dim-label")
-
-        grid_source.attach(lbl_source, 0, 0, 1, 1)
-        grid_source.attach(self.combo_source, 1, 0, 2, 1)
-        grid_source.attach(self.lbl_source_status, 1, 5, 2, 1)  # Row 5, below others
-
-        # Local Source Controls
-        self.lbl_folder = Gtk.Label(label="Path:")
-        self.lbl_folder.set_halign(Gtk.Align.START)
-
-        folder_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        self.entry_folder = Gtk.Entry()
-        self.entry_folder.set_hexpand(True)
-        self.entry_folder.set_placeholder_text("Select a folder...")
-        self.entry_folder.connect("changed", self.on_folder_changed)  # Validation/Count
-
-        btn_browse = Gtk.Button(label="Browse...")
-        btn_browse.connect("clicked", self.on_browse_clicked)
-
-        folder_hbox.pack_start(self.entry_folder, True, True, 0)
-        folder_hbox.pack_start(btn_browse, False, False, 0)
-
-        self.check_recursive = Gtk.CheckButton(label="Include subfolders")
-        self.check_recursive.set_tooltip_text("Recursively search for images in subdirectories")
-        self.check_recursive.connect("toggled", lambda w: self.update_image_count())
-
-        grid_source.attach(self.lbl_folder, 0, 1, 1, 1)
-        grid_source.attach(folder_hbox, 1, 1, 2, 1)
-        grid_source.attach(self.check_recursive, 1, 2, 2, 1)
-
-        # Unsplash Controls
-        self.lbl_api_key = Gtk.Label(label="API Key:")
-        self.lbl_api_key.set_halign(Gtk.Align.START)
-        self.entry_unsplash_api_key = Gtk.Entry()
-        self.entry_unsplash_api_key.set_visibility(False)
-        self.entry_unsplash_api_key.set_placeholder_text("Enter Unsplash Access Key")
-        self.entry_unsplash_api_key.connect("changed", self.validate_api_key)
-
-        self.lbl_keywords = Gtk.Label(label="Keywords:")
-        self.lbl_keywords.set_halign(Gtk.Align.START)
-        self.entry_keywords = Gtk.Entry()
-        self.entry_keywords.set_placeholder_text("nature, dark, architecture")
-
-        self.btn_test_unsplash = Gtk.Button(label="Test Connection")
-        self.btn_test_unsplash.connect("clicked", self.on_test_unsplash_clicked)
-
-        grid_source.attach(self.lbl_api_key, 0, 3, 1, 1)
-        grid_source.attach(self.entry_unsplash_api_key, 1, 3, 2, 1)
-        grid_source.attach(self.lbl_keywords, 0, 4, 1, 1)
-        grid_source.attach(self.entry_keywords, 1, 4, 1, 1)
-        grid_source.attach(self.btn_test_unsplash, 2, 3, 1, 1)
-
-        # --- Section 2: Display Settings ---
-        frame_display = Gtk.Frame(label="Display Settings")
-        frame_display.get_label_widget().get_style_context().add_class("title-2")
-        main_vbox.pack_start(frame_display, False, False, 0)
-
-        grid_display = Gtk.Grid()
-        grid_display.set_column_spacing(15)
-        grid_display.set_row_spacing(10)
-        grid_display.set_margin_top(15)
-        grid_display.set_margin_bottom(15)
-        grid_display.set_margin_start(15)
-        grid_display.set_margin_end(15)
-        frame_display.add(grid_display)
-
-        lbl_mode = Gtk.Label(label="Scaling Mode:")
-        lbl_mode.set_halign(Gtk.Align.START)
-        self.combo_mode = Gtk.ComboBoxText()
-        self.modes = ["zoom", "scaled", "centered", "spanned", "stretched"]
-        for mode in self.modes:
-            self.combo_mode.append_text(mode)
-
-        lbl_effect = Gtk.Label(label="Image Effect:")
-        lbl_effect.set_halign(Gtk.Align.START)
-        self.combo_effect = Gtk.ComboBoxText()
-        self.effects = ["None", "Grayscale", "Blur", "Sepia"]
-        for effect in self.effects:
-            self.combo_effect.append_text(effect)
-
-        lbl_bg_color = Gtk.Label(label="Background:")
-        lbl_bg_color.set_halign(Gtk.Align.START)
-        self.btn_color = Gtk.ColorButton()
-        self.btn_color.set_title("Select Background Color")
-        self.btn_color.set_tooltip_text("Sets the background color for 'Centered' or 'Scaled' modes where the image doesn't fill the screen.")
-
-        lbl_multi = Gtk.Label(label="Multi-Monitor:")
-        lbl_multi.set_halign(Gtk.Align.START)
-        self.combo_multi_monitor = Gtk.ComboBoxText()
-        self.multi_monitor_modes = [
-            "Single image on all monitors",
-            "Different image on each monitor",
-            "Span image across all monitors",
-        ]
-        for mode in self.multi_monitor_modes:
-            self.combo_multi_monitor.append_text(mode)
-        self.combo_multi_monitor.connect("changed", self.on_multi_monitor_changed)
-
-        grid_display.attach(lbl_mode, 0, 0, 1, 1)
-        grid_display.attach(self.combo_mode, 1, 0, 1, 1)
-
-        grid_display.attach(lbl_effect, 0, 1, 1, 1)
-        grid_display.attach(self.combo_effect, 1, 1, 1, 1)
-
-        grid_display.attach(lbl_bg_color, 2, 0, 1, 1)
-        grid_display.attach(self.btn_color, 3, 0, 1, 1)
-
-        grid_display.attach(lbl_multi, 0, 2, 1, 1)
-        grid_display.attach(self.combo_multi_monitor, 1, 2, 3, 1)
-
-        theme_box = self.build_theme_selector()
-        grid_display.attach(theme_box, 0, 3, 4, 1)
-
-        # --- Section 3: Schedule & Behavior ---
-        frame_schedule = Gtk.Frame(label="Schedule & Behavior")
-        frame_schedule.get_label_widget().get_style_context().add_class("title-2")
-        main_vbox.pack_start(frame_schedule, False, False, 0)
-
-        # Simplified HBox layout for grouping
-        schedule_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        schedule_box.set_margin_top(15)
-        schedule_box.set_margin_bottom(15)
-        schedule_box.set_margin_start(15)
-        schedule_box.set_margin_end(15)
-        frame_schedule.add(schedule_box)
-
-        # Row 1: Interval
-        row_interval = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        lbl_interval = Gtk.Label(label="Change Every:")
-        adjustment = Gtk.Adjustment(value=30, lower=0, upper=10080, step_increment=1, page_increment=10)
-        self.spin_interval = Gtk.SpinButton()
-        self.spin_interval.set_adjustment(adjustment)
-        self.spin_interval.set_numeric(True)
-        lbl_mins = Gtk.Label(label="minutes")
-
-        row_interval.pack_start(lbl_interval, False, False, 0)
-        row_interval.pack_start(self.spin_interval, False, False, 0)
-        row_interval.pack_start(lbl_mins, False, False, 0)
-
-        # Row 2: Checkboxes
-        row_checks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
-        self.check_startup = Gtk.CheckButton(label="Change on startup")
-
-        row_checks.pack_start(self.check_startup, False, False, 0)
-
-        schedule_box.pack_start(row_interval, False, False, 0)
-        schedule_box.pack_start(row_checks, False, False, 0)
-
-        # --- Section 4: Current Status ---
-        frame_status = Gtk.Frame(label="Current Status")
-        frame_status.get_label_widget().get_style_context().add_class("title-2")
-        main_vbox.pack_start(frame_status, False, False, 0)
-
-        vbox_status = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        vbox_status.set_margin_top(15)
-        vbox_status.set_margin_bottom(15)
-        vbox_status.set_margin_start(15)
-        vbox_status.set_margin_end(15)
-        frame_status.add(vbox_status)
-
-        # Status Top Row: Thumbnail + Details
-        hbox_status_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=15)
-        vbox_status.pack_start(hbox_status_top, False, False, 0)
-
-        # Thumbnail Container
         self.preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        hbox_status_top.pack_start(self.preview_box, False, False, 0)
+        hero_box.pack_start(self.preview_box, False, False, 0)
 
-        # Details Column
-        vbox_details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        hbox_status_top.pack_start(vbox_details, True, True, 0)
+        info_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        info_vbox.set_valign(Gtk.Align.CENTER)
+        hero_box.pack_start(info_vbox, False, False, 0)
 
-        # Next Change Label
-        self.lbl_next_change = Gtk.Label(label="Next change: --:--")
-        self.lbl_next_change.set_halign(Gtk.Align.START)
-        vbox_details.pack_start(self.lbl_next_change, False, False, 0)
-
-        # Current Path (Read-only)
         self.entry_current_path = Gtk.Entry()
         self.entry_current_path.set_editable(False)
         self.entry_current_path.set_has_frame(False)
         self.entry_current_path.get_style_context().add_class("flat")
         self.entry_current_path.set_placeholder_text("No wallpaper set")
-        vbox_details.pack_start(self.entry_current_path, False, False, 0)
+        self.entry_current_path.set_width_chars(30)
+        info_vbox.pack_start(self.entry_current_path, False, False, 0)
 
-        self.btn_apply_now = Gtk.Button(label="Apply Now")
-        self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
-        self.btn_apply_now.set_always_show_image(True)
-        self.btn_apply_now.connect("clicked", self.on_next_wallpaper_clicked)
-        self.btn_apply_now.set_halign(Gtk.Align.START)
-        vbox_details.pack_start(self.btn_apply_now, False, False, 0)
+        self.lbl_next_change = Gtk.Label(label="Next change: --:--")
+        self.lbl_next_change.set_halign(Gtk.Align.START)
+        self.lbl_next_change.get_style_context().add_class("dim-label")
+        info_vbox.pack_start(self.lbl_next_change, False, False, 0)
 
-        # --- Bottom Actions ---
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        btn_box.set_halign(Gtk.Align.END)
-        btn_box.set_margin_bottom(10)
-        btn_box.set_margin_end(10)
-        main_vbox.pack_end(btn_box, False, True, 0)
+        self.lbl_source_status = Gtk.Label(label="")
+        self.lbl_source_status.set_halign(Gtk.Align.START)
+        info_vbox.pack_start(self.lbl_source_status, False, False, 0)
 
-        btn_save = Gtk.Button(label="_Save Settings")
-        btn_save.set_use_underline(True)
-        btn_save.get_style_context().add_class("suggested-action")
-        btn_save.connect("clicked", self.on_save_clicked)
+    def _build_source_section(self, parent):
+        lbl_section = Gtk.Label(label="Source")
+        lbl_section.set_halign(Gtk.Align.START)
+        lbl_section.set_markup("<b>Source</b>")
+        parent.pack_start(lbl_section, False, False, 0)
 
-        btn_box.pack_end(btn_save, False, True, 0)
+        source_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        source_box.set_margin_start(10)
+        parent.pack_start(source_box, False, False, 0)
 
-        # Disable controls if DE is not supported
-        if not self.is_de_supported:
-            self.combo_source.set_sensitive(False)
-            self.entry_folder.set_sensitive(False)
-            btn_browse.set_sensitive(False)
-            self.check_recursive.set_sensitive(False)
-            self.entry_unsplash_api_key.set_sensitive(False)
-            self.entry_keywords.set_sensitive(False)
-            self.btn_test_unsplash.set_sensitive(False)
-            self.combo_mode.set_sensitive(False)
-            self.combo_effect.set_sensitive(False)
-            self.btn_color.set_sensitive(False)
-            self.combo_multi_monitor.set_sensitive(False)
-            self.spin_interval.set_sensitive(False)
-            self.check_startup.set_sensitive(False)
-            self.btn_apply_now.set_sensitive(False)
-            btn_save.set_sensitive(False)
+        self.combo_source = Gtk.ComboBoxText()
+        for source in self.sources:
+            self.combo_source.append_text(source)
+        self.combo_source.connect("changed", self.on_source_changed)
+        source_box.pack_start(self.combo_source, False, False, 0)
 
-        # Disable scheduling controls if systemd is not available
-        if not self.is_systemd_available:
-            self.spin_interval.set_sensitive(False)
-            self.spin_interval.set_tooltip_text("Disabled because systemd was not found.")
-            self.check_startup.set_sensitive(False)
-            self.check_startup.set_tooltip_text("Disabled because systemd was not found.")
-            # The Save button should still be sensitive if other settings (not related to scheduling) can be saved.
-            # But the schedule itself will not work, so disabling save for scheduling is fine.
-            # However, if DE is supported but systemd is not, save button should still be sensitive
-            # only for saving non-scheduling related settings.
-            # So, only disable scheduling controls, not the save button.
+        self.stack_source = Gtk.Stack()
+        self.stack_source.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        source_box.pack_start(self.stack_source, False, False, 0)
+
+        # Local Page
+        page_local = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        hbox_folder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        self.entry_folder = Gtk.Entry()
+        self.entry_folder.set_hexpand(True)
+        self.entry_folder.set_placeholder_text("Select a folder...")
+        self.entry_folder.connect("changed", self.on_folder_changed)
+        self.btn_browse = Gtk.Button(label="Browse...")
+        self.btn_browse.connect("clicked", self.on_browse_clicked)
+        hbox_folder.pack_start(self.entry_folder, True, True, 0)
+        hbox_folder.pack_start(self.btn_browse, False, False, 0)
+        self.check_recursive = Gtk.CheckButton(label="Include subfolders")
+        self.check_recursive.connect("toggled", lambda w: self.update_image_count())
+        page_local.pack_start(hbox_folder, False, False, 0)
+        page_local.pack_start(self.check_recursive, False, False, 0)
+        self.stack_source.add_named(page_local, "Local Folder")
+
+        # Unsplash Page
+        page_unsplash = Gtk.Grid()
+        page_unsplash.set_column_spacing(10)
+        page_unsplash.set_row_spacing(10)
+
+        self.lbl_api_key = Gtk.Label(label="API Key:")
+        self.entry_unsplash_api_key = Gtk.Entry()
+        self.entry_unsplash_api_key.set_visibility(False)
+        self.entry_unsplash_api_key.set_placeholder_text("Unsplash Access Key")
+        self.entry_unsplash_api_key.connect("changed", self.validate_api_key)
+
+        self.lbl_keywords = Gtk.Label(label="Keywords:")
+        self.entry_keywords = Gtk.Entry()
+        self.entry_keywords.set_placeholder_text("nature, architecture")
+
+        self.btn_test_unsplash = Gtk.Button(label="Test Connection")
+        self.btn_test_unsplash.connect("clicked", self.on_test_unsplash_clicked)
+
+        page_unsplash.attach(self.lbl_api_key, 0, 0, 1, 1)
+        page_unsplash.attach(self.entry_unsplash_api_key, 1, 0, 1, 1)
+        page_unsplash.attach(self.btn_test_unsplash, 2, 0, 1, 1)
+        page_unsplash.attach(self.lbl_keywords, 0, 1, 1, 1)
+        page_unsplash.attach(self.entry_keywords, 1, 1, 2, 1)
+        self.stack_source.add_named(page_unsplash, "Unsplash")
+
+    def _build_settings_section(self, parent):
+        lbl_section = Gtk.Label(label="Settings")
+        lbl_section.set_halign(Gtk.Align.START)
+        lbl_section.set_markup("<b>Settings</b>")
+        parent.pack_start(lbl_section, False, False, 0)
+
+        grid = Gtk.Grid()
+        grid.set_column_spacing(20)
+        grid.set_row_spacing(15)
+        grid.set_margin_start(10)
+        parent.pack_start(grid, False, False, 0)
+
+        # Mode
+        grid.attach(Gtk.Label(label="Scaling:", halign=Gtk.Align.START), 0, 0, 1, 1)
+        self.combo_mode = Gtk.ComboBoxText()
+        for mode in self.modes:
+            self.combo_mode.append_text(mode)
+        grid.attach(self.combo_mode, 1, 0, 1, 1)
+
+        # Effect
+        grid.attach(Gtk.Label(label="Effect:", halign=Gtk.Align.START), 0, 1, 1, 1)
+        self.combo_effect = Gtk.ComboBoxText()
+        for effect in self.effects:
+            self.combo_effect.append_text(effect)
+        grid.attach(self.combo_effect, 1, 1, 1, 1)
+        # Background
+        grid.attach(Gtk.Label(label="Background:", halign=Gtk.Align.START), 2, 0, 1, 1)
+        self.btn_color = Gtk.ColorButton()
+        grid.attach(self.btn_color, 3, 0, 1, 1)
+
+        # Theme
+        grid.attach(Gtk.Label(label="Theme:", halign=Gtk.Align.START), 2, 1, 1, 1)
+        self.combo_theme = Gtk.ComboBoxText()
+        for name in THEMES.keys():
+            self.combo_theme.append_text(name)
+
+        current_theme = "Ubuntu"
+        if self.app and hasattr(self.app, "theme_manager"):
+            current_theme = self.app.theme_manager.current_theme_name
+        self.combo_theme.set_active(list(THEMES.keys()).index(current_theme) if current_theme in THEMES else 0)
+        self.combo_theme.connect("changed", self._on_theme_changed)
+        grid.attach(self.combo_theme, 3, 1, 1, 1)
+
+        # Automation
+        grid.attach(Gtk.Label(label="Automation:", halign=Gtk.Align.START), 0, 2, 1, 1)
+        hbox_auto = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        hbox_auto.pack_start(Gtk.Label(label="Every"), False, False, 0)
+        self.spin_interval = Gtk.SpinButton()
+        self.spin_interval.set_adjustment(Gtk.Adjustment(value=30, lower=1, upper=10080, step_increment=1))
+        self.spin_interval.set_numeric(True)
+        hbox_auto.pack_start(self.spin_interval, False, False, 0)
+        hbox_auto.pack_start(Gtk.Label(label="mins"), False, False, 0)
+        hbox_auto.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 10)
+        self.check_startup = Gtk.CheckButton(label="On Startup")
+        hbox_auto.pack_start(self.check_startup, False, False, 0)
+        grid.attach(hbox_auto, 1, 2, 3, 1)
+
+        # Monitors
+        grid.attach(Gtk.Label(label="Monitors:", halign=Gtk.Align.START), 0, 3, 1, 1)
+        self.combo_multi_monitor = Gtk.ComboBoxText()
+        for m in self.multi_monitor_modes:
+            self.combo_multi_monitor.append_text(m)
+        self.combo_multi_monitor.connect("changed", self.on_multi_monitor_changed)
+        grid.attach(self.combo_multi_monitor, 1, 3, 3, 1)
+
+    def _apply_de_restrictions(self):
+        self.combo_source.set_sensitive(False)
+        self.stack_source.set_sensitive(False)
+        self.btn_save.set_sensitive(False)
+        self.btn_apply_now.set_sensitive(False)
+
+    def _apply_systemd_restrictions(self):
+        self.spin_interval.set_sensitive(False)
+        self.check_startup.set_sensitive(False)
+        self.spin_interval.set_tooltip_text("Disabled: systemd not found.")
+        self.check_startup.set_tooltip_text("Disabled: systemd not found.")
+
+    def _on_theme_changed(self, cb):
+        text = cb.get_active_text()
+        if text and self.app and hasattr(self.app, "theme_manager"):
+            self.app.theme_manager.set_theme_name(text)
+            new_provider = self.app.theme_manager.get_css_provider()
+            style_context = self.get_style_context()
+            if self.app.css_provider:
+                style_context.remove_provider(self.app.css_provider)
+            style_context.add_provider(new_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            self.app.css_provider = new_provider
 
     def count_local_images(self, path, recursive):
         if not path or not os.path.isdir(path):
@@ -483,36 +404,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         else:
             widget.get_style_context().remove_class("warning")
 
-    def build_theme_selector(self):
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        label = Gtk.Label(label="UI Theme:")
-        self.combo_theme = Gtk.ComboBoxText()
-        for name in THEMES.keys():
-            self.combo_theme.append_text(name)
 
-        current_theme_name = "Ubuntu"
-        if self.app and hasattr(self.app, "theme_manager"):
-            current_theme_name = self.app.theme_manager.current_theme_name
-
-        self.combo_theme.set_active(list(THEMES.keys()).index(current_theme_name) if current_theme_name in THEMES else 0)
-
-        def on_theme_changed(cb):
-            text = cb.get_active_text()
-            if text and self.app and hasattr(self.app, "theme_manager"):
-                self.app.theme_manager.set_theme_name(text)
-                new_provider = self.app.theme_manager.get_css_provider()
-
-                style_context = self.get_style_context()
-                if self.app.css_provider:
-                    style_context.remove_provider(self.app.css_provider)
-
-                style_context.add_provider(new_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-                self.app.css_provider = new_provider
-
-        self.combo_theme.connect("changed", on_theme_changed)
-        hbox.pack_start(label, False, False, 0)
-        hbox.pack_start(self.combo_theme, False, False, 0)
-        return hbox
 
     def on_multi_monitor_changed(self, combo):
         text = combo.get_active_text()
@@ -528,25 +420,14 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
     def on_source_changed(self, combo):
         text = combo.get_active_text()
-        is_local = text == "Local Folder"
+        if hasattr(self, 'stack_source'):
+            child = "Local Folder" if text == "Local Folder" else "Unsplash"
+            self.stack_source.set_visible_child_name(child)
 
-        # Toggle visibility of local folder controls
-        self.lbl_folder.set_visible(is_local)
-        self.entry_folder.get_parent().set_visible(is_local)  # Hide the HBox containing entry and browse
-        self.check_recursive.set_visible(is_local)
-
-        # Toggle visibility of Unsplash controls
-        self.lbl_api_key.set_visible(not is_local)
-        self.entry_unsplash_api_key.set_visible(not is_local)
-        self.lbl_keywords.set_visible(not is_local)
-        self.entry_keywords.set_visible(not is_local)
-        self.btn_test_unsplash.set_visible(not is_local)
-
-        if not is_local:
-            unsplash_api_key = self.config_manager.get_setting(self.config, "Settings", "unsplash_api_key", "YOUR_UNSPLASH_API_KEY")
-            if unsplash_api_key and unsplash_api_key != "YOUR_UNSPLASH_API_KEY":
-                # Maybe auto-fill or handle logic
-                pass
+            if text == "Local Folder":
+                 self.update_image_count()
+            else:
+                 self.lbl_source_status.set_text("✓ Unsplash Source")
 
     def on_test_unsplash_clicked(self, widget):
         api_key = self.entry_unsplash_api_key.get_text()

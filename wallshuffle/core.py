@@ -3,7 +3,7 @@ import os
 import random
 from enum import Enum, auto
 
-from .config_manager import ConfigManager
+from .config_manager import get_config_manager
 from .constants import SUPPORTED_EXTENSIONS
 from .effects import apply_image_effect
 from .online_sources import OnlineSourceManager
@@ -22,9 +22,29 @@ class WallpaperUpdateResult(Enum):
     FILE_SYSTEM_ERROR = auto()
 
 
-def change_wallpaper():
+def change_wallpaper() -> WallpaperUpdateResult:
+    """
+    Change the desktop wallpaper based on current configuration.
+
+    This function serves as the main entry point for wallpaper changes, called
+    from both the GUI and the systemd timer (wallshuffle --change).
+
+    Returns:
+        WallpaperUpdateResult: Enum indicating the outcome:
+            - SUCCESS: Wallpaper changed successfully
+            - NO_SOURCE_CONFIGURED: No valid source (folder/API) configured
+            - NO_IMAGES_FOUND: Source configured but no images available
+            - NETWORK_ERROR: Network failure when fetching online sources
+            - UNSUPPORTED_DESKTOP: Desktop environment not supported
+            - COMMAND_FAILED: Desktop settings command failed
+            - CONFIGURATION_ERROR: Config file corrupted or missing
+            - FILE_SYSTEM_ERROR: Cannot access local folder/files
+
+    Thread-Safety:
+        Uses singleton ConfigManager to ensure consistent state across calls.
+    """
     logging.info("--- Running change_wallpaper ---")
-    config_manager = ConfigManager()
+    config_manager = get_config_manager()
     config = config_manager.load_settings()
 
     if "Settings" not in config:

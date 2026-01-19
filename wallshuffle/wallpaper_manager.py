@@ -130,9 +130,24 @@ class WallpaperManager:
                 try:
                     if subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=2).returncode == 0:
                         return de_name
-                except Exception:
+                except subprocess.CalledProcessError:
+                    # Process not running (expected, continue checking)
                     continue
+                except subprocess.TimeoutExpired:
+                    self.logger.warning(f"DE detection timeout for process '{proc_name}'")
+                    continue
+                except (FileNotFoundError, PermissionError) as e:
+                    self.logger.warning(f"DE detection failed for '{proc_name}': {e}")
+                    continue
+                except Exception as e:
+                    # Unexpected error - log it for debugging
+                    self.logger.debug(f"Unexpected error checking process '{proc_name}': {e}")
+                    continue
+        else:
+            self.logger.warning("pgrep not found. Cannot detect DE via process inspection.")
 
+        # If we reach here, we couldn't detect DE via any method
+        self.logger.warning("Could not detect desktop environment via any method. Returning 'unknown'.")
         return "unknown"
 
     def _run_subprocess(self, command, description="", timeout=10):
