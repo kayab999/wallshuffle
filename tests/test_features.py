@@ -49,9 +49,9 @@ class TestWallShuffleFeatures(unittest.TestCase):
             }
         }
 
-        with patch('wallshuffle.core.ConfigManager') as MockConfigManager:
+        with patch('wallshuffle.core.get_config_manager') as mock_get_cm:
             # Setup the mock instance
-            mock_instance = MockConfigManager.return_value
+            mock_instance = mock_get_cm.return_value
             mock_instance.load_settings.return_value = mock_config
 
             # Setup get_setting side effects

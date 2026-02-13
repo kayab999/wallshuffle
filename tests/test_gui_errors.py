@@ -6,6 +6,8 @@ import pytest
 
 gi.require_version("Gtk", "3.0")
 
+from wallshuffle.core import WallpaperUpdateResult
+
 
 # Mock the Gtk.MessageDialog for testing GUI interactions
 @pytest.fixture
@@ -30,8 +32,8 @@ def mock_config_file(tmp_path):
         yield test_config_file
 
 
-# Test that an error dialog is shown when Unsplash API key is not configured
-def test_unsplash_api_key_missing_shows_dialog(mock_show_error_dialog, mock_config_file):
+# Test that change_wallpaper returns NO_SOURCE_CONFIGURED when Unsplash API key is missing (fallback to Local Folder with no folder)
+def test_unsplash_api_key_missing_fallback(mock_config_file):
     # Ensure the config file exists but doesn't have the API key set
     config = configparser.ConfigParser()
     config["Settings"] = {"source": "Unsplash", "keywords": "test"}
@@ -43,21 +45,24 @@ def test_unsplash_api_key_missing_shows_dialog(mock_show_error_dialog, mock_conf
             return "Unsplash"
         if option == "unsplash_api_key":
             return "YOUR_UNSPLASH_API_KEY"
+        if option == "folder":
+            return "" # Fallback to local folder with no folder
         return fallback
 
     # Temporarily set UNSPLASH_API_KEY to the default placeholder
     with patch(
-        "wallshuffle.config_manager.ConfigManager.get_setting", side_effect=get_setting_side_effect
-    ), patch(
+        "wallshuffle.core.get_config_manager"
+    ) as mock_get_cm, patch(
         "wallshuffle.wallpaper_manager.WallpaperManager.get_desktop_environment", return_value="gnome"
     ):
+        mock_instance = mock_get_cm.return_value
+        mock_instance.get_setting.side_effect = get_setting_side_effect
+        mock_instance.load_settings.return_value = config
+
         # Import change_wallpaper here to ensure mocks are active when it's loaded
-        from wallshuffle import change_wallpaper
+        from wallshuffle.core import change_wallpaper
 
-        change_wallpaper()
+        result = change_wallpaper()
 
-    # Assert that show_error_dialog was called
-    mock_show_error_dialog.assert_called_once()
-    mock_show_error_dialog.assert_called_with(
-        "Unsplash API key is not configured. Please set it in the settings.", parent=None
-    )
+    # Assert that it returned NO_SOURCE_CONFIGURED (because of the fallback to empty local folder)
+    assert result == WallpaperUpdateResult.NO_SOURCE_CONFIGURED
