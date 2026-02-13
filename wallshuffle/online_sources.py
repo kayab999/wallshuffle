@@ -149,11 +149,12 @@ class OnlineSourceManager:
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             os.makedirs(temp_dir, exist_ok=True)
             # Use index in filename to avoid overwrites during multi-monitor fetches
-            image_path = os.path.join(temp_dir, f"unsplash_wallpaper_{index}.jpg")
-
-            with open(image_path, "wb") as f:
+            # Use secure temp file creation
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir) as f:
                 for chunk in image_response.iter_content(chunk_size=8192):
                     f.write(chunk)
+                image_path = f.name
 
             # Read back for cache
             self._save_image_file_to_cache(image_path, keywords)
@@ -232,3 +233,30 @@ class OnlineSourceManager:
     def fetch_reddit_wallpaper(self, subreddit):
         logging.warning("Reddit integration not yet implemented.")
         return None
+
+    @staticmethod
+    def cleanup_old_cache():
+        """Removes all cache files older than CACHE_EXPIRATION_HOURS."""
+        if not os.path.exists(CACHE_DIR):
+            return
+
+        now = time.time()
+        expiration_seconds = CACHE_EXPIRATION_HOURS * 3600
+        
+        logging.info("Starting cache cleanup...")
+        removed_count = 0
+        try:
+            for f in os.listdir(CACHE_DIR):
+                path = os.path.join(CACHE_DIR, f)
+                if os.path.isfile(path):
+                    try:
+                        file_time = os.path.getmtime(path)
+                        if (now - file_time) > expiration_seconds:
+                            os.remove(path)
+                            removed_count += 1
+                    except OSError:
+                        pass
+            if removed_count > 0:
+                logging.info(f"Cleanup complete. Removed {removed_count} expired cache files.")
+        except Exception as e:
+            logging.error(f"Error during cache cleanup: {e}")

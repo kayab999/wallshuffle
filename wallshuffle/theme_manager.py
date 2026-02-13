@@ -55,6 +55,14 @@ class ThemeManager:
     def get_css_provider(self):
         """Builds and returns a Gtk.CssProvider for the active theme."""
         theme = THEMES.get(self.current_theme_name, THEMES["Ubuntu"])
+        
+        # If theme is Custom, override values with those from config
+        if self.current_theme_name == "Custom":
+            theme = theme.copy() # Don't mutate the original dictionary
+            theme["background"] = self.config_manager.get_setting(self.config, "Settings", "custom_background", theme["background"])
+            theme["foreground"] = self.config_manager.get_setting(self.config, "Settings", "custom_foreground", theme["foreground"])
+            theme["accent"] = self.config_manager.get_setting(self.config, "Settings", "custom_accent", theme["accent"])
+            theme["button_text"] = self.config_manager.get_setting(self.config, "Settings", "custom_button_text", theme.get("button_text", "#FFFFFF"))
 
         css = f"""
 #wallshuffle-main-window {{

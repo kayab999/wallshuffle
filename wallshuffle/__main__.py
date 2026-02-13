@@ -96,13 +96,23 @@ def main():
         args = parser.parse_args()
 
         if args.change:
+            # Debugging for keybinding/CLI issues
+            if os.environ.get("WALLSHUFFLE_DEBUG_CLI") == "1":
+                 logging.info(f"CLI Environment: DISPLAY={os.environ.get('DISPLAY')}, DBUS_SESSION={os.environ.get('DBUS_SESSION_BUS_ADDRESS')}, XDG_CURRENT_DESKTOP={os.environ.get('XDG_CURRENT_DESKTOP')}")
+
             result = change_wallpaper()
+            
+            # Flush logs to ensure they are written immediately
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+
             if result != WallpaperUpdateResult.SUCCESS:
                 logging.error(f"CLI wallpaper change failed with status: {result.name}")
                 sys.exit(1)
             else:
                 logging.info("CLI wallpaper change finished successfully.")
                 sys.exit(0)
+
         else:
             app = WallpaperApp()
             exit_code = app.run(sys.argv)

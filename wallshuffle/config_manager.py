@@ -101,6 +101,16 @@ class ConfigManager:
                         config.read_file(f)
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
+                
+                # Legacy Migration: If "Settings.folder" exists but no "FolderCategories", migrate it.
+                if config.has_option("Settings", "folder") and not config.has_section("FolderCategories"):
+                    old_folder = config.get("Settings", "folder")
+                    if old_folder:
+                        config.add_section("FolderCategories")
+                        config.set("FolderCategories", "Default", old_folder)
+                        # We don't delete the old setting yet to maintain temporary backward compat, 
+                        # or we can just leave it as the 'default' selection.
+
         except (configparser.Error, IOError) as e:
             logging.error(f"Error reading config file {CONFIG_FILE}: {e}")
             self.create_default_config(config)
@@ -134,10 +144,14 @@ class ConfigManager:
         """
         Save configuration settings to disk.
 
+        To prevent race conditions and stale data overwrites, this method:
+        1. Reloads the latest data from disk.
+        2. Applies only the specific changes in settings_dict.
+        3. Saves the merged configuration back to disk.
+
         Args:
-            config: ConfigParser object to modify and save.
-            settings_dict: Dictionary of key-value pairs to save. Values are
-                automatically converted to strings.
+            config: ConfigParser object (unused for reading, but updated for consistency).
+            settings_dict: Dictionary of key-value pairs to save.
 
         Returns:
             bool: True if save succeeded, False otherwise.
@@ -145,16 +159,42 @@ class ConfigManager:
         Thread-Safety:
             Uses exclusive file lock (LOCK_EX) to prevent concurrent writes.
         """
-        if "Settings" not in config:
-            config["Settings"] = {}
-        for key, value in settings_dict.items():
-            config["Settings"][key] = str(value)
-
         try:
-            with open(CONFIG_FILE, "w") as configfile:
+            # Atomic Read-Modify-Write
+            # We open the file in 'r+' mode to allow both reading and writing with a single file descriptor and lock
+            # If the file doesn't exist, we fallback to 'w' (create) but that loses the atomicity of read-current-state.
+            # However, ensure_config_dir_exists and load_settings usually ensure existence.
+            
+            # Using os.open to ensure it works even if file doesn't exist (handle creation)
+            if not os.path.exists(CONFIG_FILE):
+                 with open(CONFIG_FILE, 'w') as f:
+                     pass # Create empty file
+
+            with open(CONFIG_FILE, "r+") as configfile:
                 try:
+                    # Acquire Exclusive Lock immediately
                     fcntl.flock(configfile, fcntl.LOCK_EX)
-                    config.write(configfile)
+                    
+                    # 1. Read current state from disk
+                    disk_config = configparser.ConfigParser()
+                    disk_config.read_file(configfile)
+                    
+                    if "Settings" not in disk_config:
+                        disk_config["Settings"] = {}
+
+                    # 2. Merge changes
+                    for key, value in settings_dict.items():
+                        disk_config["Settings"][key] = str(value)
+                        # Sync in-memory object too
+                        if "Settings" not in config:
+                            config["Settings"] = {}
+                        config["Settings"][key] = str(value)
+
+                    # 3. Write back
+                    configfile.seek(0)
+                    disk_config.write(configfile)
+                    configfile.truncate() # Ensure we don't leave old tail data
+                    
                 finally:
                     fcntl.flock(configfile, fcntl.LOCK_UN)
             return True
@@ -221,3 +261,39 @@ class ConfigManager:
             # Log the error but DO NOT CRASH. Return the safe default.
             logging.error(f"Config read error ({section}.{option}): {e}")
             return fallback
+
+    def save_categories(self, categories: Dict[str, str]) -> bool:
+        """
+        Save folder categories to the config file with locking.
+        """
+        try:
+             # Atomic Read-Modify-Write
+            if not os.path.exists(CONFIG_FILE):
+                 with open(CONFIG_FILE, 'w') as f:
+                     pass
+
+            with open(CONFIG_FILE, "r+") as configfile:
+                try:
+                    fcntl.flock(configfile, fcntl.LOCK_EX)
+                    
+                    disk_config = configparser.ConfigParser()
+                    disk_config.read_file(configfile)
+                    
+                    if not disk_config.has_section("FolderCategories"):
+                        disk_config.add_section("FolderCategories")
+                    else:
+                        disk_config.remove_section("FolderCategories")
+                        disk_config.add_section("FolderCategories")
+
+                    for name, path in categories.items():
+                        disk_config.set("FolderCategories", name, path)
+
+                    configfile.seek(0)
+                    disk_config.write(configfile)
+                    configfile.truncate()
+                finally:
+                    fcntl.flock(configfile, fcntl.LOCK_UN)
+            return True
+        except Exception as e:
+            logging.error(f"Error saving categories: {e}")
+            return False

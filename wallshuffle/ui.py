@@ -213,14 +213,16 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Local Page
         page_local = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         hbox_folder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        self.entry_folder = Gtk.Entry()
-        self.entry_folder.set_hexpand(True)
-        self.entry_folder.set_placeholder_text("Select a folder...")
-        self.entry_folder.connect("changed", self.on_folder_changed)
-        self.btn_browse = Gtk.Button(label="Browse...")
-        self.btn_browse.connect("clicked", self.on_browse_clicked)
-        hbox_folder.pack_start(self.entry_folder, True, True, 0)
-        hbox_folder.pack_start(self.btn_browse, False, False, 0)
+        
+        self.combo_folders = Gtk.ComboBoxText()
+        self.combo_folders.set_hexpand(True)
+        self.combo_folders.connect("changed", self.on_folder_changed)
+        
+        self.btn_manage_folders = Gtk.Button(label="Manage Sources...")
+        self.btn_manage_folders.connect("clicked", self.on_manage_folders_clicked)
+        
+        hbox_folder.pack_start(self.combo_folders, True, True, 0)
+        hbox_folder.pack_start(self.btn_manage_folders, False, False, 0)
         self.check_recursive = Gtk.CheckButton(label="Include subfolders")
         self.check_recursive.connect("toggled", lambda w: self.update_image_count())
         page_local.pack_start(hbox_folder, False, False, 0)
@@ -295,6 +297,24 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.combo_theme.connect("changed", self._on_theme_changed)
         grid.attach(self.combo_theme, 3, 1, 1, 1)
 
+        # Custom Theme Colors (Initally hidden)
+        self.box_custom_colors = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.box_custom_colors.pack_start(Gtk.Label(label="Custom Colors:"), False, False, 0)
+        
+        self.btn_custom_bg = Gtk.ColorButton()
+        self.btn_custom_bg.set_tooltip_text("Background Color")
+        self.box_custom_colors.pack_start(self.btn_custom_bg, False, False, 0)
+        
+        self.btn_custom_fg = Gtk.ColorButton()
+        self.btn_custom_fg.set_tooltip_text("Foreground Color")
+        self.box_custom_colors.pack_start(self.btn_custom_fg, False, False, 0)
+        
+        self.btn_custom_accent = Gtk.ColorButton()
+        self.btn_custom_accent.set_tooltip_text("Accent Color")
+        self.box_custom_colors.pack_start(self.btn_custom_accent, False, False, 0)
+        
+        parent.pack_start(self.box_custom_colors, False, False, 0)
+
         # Automation
         grid.attach(Gtk.Label(label="Automation:", halign=Gtk.Align.START), 0, 2, 1, 1)
         hbox_auto = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -330,9 +350,16 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.check_startup.set_tooltip_text("Disabled: systemd not found.")
 
     def _on_theme_changed(self, cb):
-        text = cb.get_active_text()
-        if text and self.app and hasattr(self.app, "theme_manager"):
-            self.app.theme_manager.set_theme_name(text)
+        theme_name = cb.get_active_text()
+        if theme_name and self.app and hasattr(self.app, "theme_manager"):
+            self.app.theme_manager.set_theme_name(theme_name)
+            
+            # Show/hide custom color pickers
+            if theme_name == "Custom":
+                self.box_custom_colors.show_all()
+            else:
+                self.box_custom_colors.hide()
+
             new_provider = self.app.theme_manager.get_css_provider()
             style_context = self.get_style_context()
             if self.app.css_provider:
@@ -371,10 +398,15 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 pass
         return count
 
-    def update_image_count(self):
+    def update_image_count(self, path_override=None):
         source = self.combo_source.get_active_text()
         if source == "Local Folder":
-            path = self.entry_folder.get_text()
+            if path_override:
+                path = path_override
+            else:
+                cat_name = self.combo_folders.get_active_text()
+                path = self.folder_categories.get(cat_name) if cat_name else None
+
             recursive = self.check_recursive.get_active()
             if path and os.path.isdir(path):
                 # Run in thread to avoid freezing UI on large folders
@@ -384,19 +416,24 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
                 threading.Thread(target=count_thread, daemon=True).start()
             else:
-                self.lbl_source_status.set_text("⚠ Invalid path")
+                self.lbl_source_status.set_text("⚠ Select a folder category")
         else:
             self.lbl_source_status.set_text("✓ Unsplash Source")
 
     def on_folder_changed(self, widget):
-        path = widget.get_text()
-        if os.path.isdir(path):
-            widget.get_style_context().remove_class("error")
-            self.update_image_count()
-        else:
-            widget.get_style_context().add_class("error")
-            self.lbl_source_status.set_text("⚠ Path does not exist")
+        # Now widget is a ComboBoxText
+        category_name = widget.get_active_text()
+        if category_name and category_name in self.folder_categories:
+            path = self.folder_categories[category_name]
+            if os.path.isdir(path):
+                # We can't apply style classes to the combo box entry easily unless we get the child entry
+                # But for now let's just update the count.
+                self.update_image_count(path_override=path)
+                return
 
+        # Explicitly handle empty or invalid
+        self.lbl_source_status.set_text("⚠ Select a valid category")
+        
     def validate_api_key(self, widget):
         key = widget.get_text()
         if len(key) < 20 and key != "":  # Arbitrary check for length
@@ -466,13 +503,41 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         dialog.show()
 
     def load_settings(self):
+        # Load Categories first
+        self._load_categories_from_config()
+        self.update_folder_combo()
+
         if "Settings" in self.config:
             settings = self.config["Settings"]
-            source = settings.get("source", "Local Folder")
-            if source in self.sources:
-                self.combo_source.set_active(self.sources.index(source))
+            
+            # Ensure valid values and avoid None
+            def safe_set_active(combo, value, options):
+                if value in options:
+                    combo.set_active(options.index(value))
+                else:
+                    combo.set_active(0)
 
-            self.entry_folder.set_text(settings.get("folder", ""))
+            source = settings.get("source", "Local Folder")
+            safe_set_active(self.combo_source, source, self.sources)
+
+            # Match saved folder path to category
+            saved_Folder = settings.get("folder", "")
+            found_cat = None
+            for name, path in self.folder_categories.items():
+                if path == saved_Folder:
+                    found_cat = name
+                    break
+            
+            # Set active using simple iteration as safe_set_active is generic
+            if found_cat:
+                # find index of found_cat
+                idx = 0
+                for name in self.folder_categories:
+                    if name == found_cat:
+                        self.combo_folders.set_active(idx)
+                        break
+                    idx += 1
+
             self.check_recursive.set_active(self.config_manager.get_setting(self.config, "Settings", "recursive_search", False, value_type=bool))
             self.entry_keywords.set_text(settings.get("keywords", ""))
 
@@ -482,19 +547,38 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             self.entry_unsplash_api_key.set_text(unsplash_api_key)
 
             mode = settings.get("mode", "zoom")
-            if mode in self.modes:
-                self.combo_mode.set_active(self.modes.index(mode))
+            safe_set_active(self.combo_mode, mode, self.modes)
 
             self.spin_interval.set_value(self.config_manager.get_setting(self.config, "Settings", "interval", 30, value_type=int))
             self.check_startup.set_active(self.config_manager.get_setting(self.config, "Settings", "startup", False, value_type=bool))
 
             effect = settings.get("effect", "None")
-            if effect in self.effects:
-                self.combo_effect.set_active(self.effects.index(effect))
+            safe_set_active(self.combo_effect, effect, self.effects)
 
             multi_monitor_mode = settings.get("multi_monitor_mode", "Single image on all monitors")
-            if multi_monitor_mode in self.multi_monitor_modes:
-                self.combo_multi_monitor.set_active(self.multi_monitor_modes.index(multi_monitor_mode))
+            safe_set_active(self.combo_multi_monitor, multi_monitor_mode, self.multi_monitor_modes)
+
+            # Theme loading
+            theme_name = settings.get("theme", "Ubuntu")
+            theme_keys = list(THEMES.keys())
+            safe_set_active(self.combo_theme, theme_name, theme_keys)
+            
+            # Visibility for custom colors
+            if theme_name == "Custom":
+                self.box_custom_colors.show_all()
+                
+                # Load custom colors
+                def parse_and_set(btn, color_str, default="#000000"):
+                    c = Gdk.RGBA()
+                    if not c.parse(color_str):
+                        c.parse(default)
+                    btn.set_rgba(c)
+
+                parse_and_set(self.btn_custom_bg, settings.get("custom_background", "#F5F5F5"))
+                parse_and_set(self.btn_custom_fg, settings.get("custom_foreground", "#333333"))
+                parse_and_set(self.btn_custom_accent, settings.get("custom_accent", "#007ACC"))
+            else:
+                self.box_custom_colors.hide()
 
             bg_color_str = settings.get("background_color", "#000000")
             color = Gdk.RGBA()
@@ -543,6 +627,62 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
     def on_refresh_path_clicked(self, widget):
         self.update_current_wallpaper_label()
+
+    def save_folder_categories(self):
+        """Saves current folder categories to config."""
+        # Update local config object for immediate consistency (though not strictly needed if we reload)
+        if not self.config.has_section("FolderCategories"):
+            self.config.add_section("FolderCategories")
+        self.config.remove_section("FolderCategories") # Clear old
+        self.config.add_section("FolderCategories")
+        for name, path in self.folder_categories.items():
+            self.config.set("FolderCategories", name, path)
+
+        # Persist using ConfigManager
+        self.config_manager.save_categories(self.folder_categories)
+        self.update_folder_combo()
+
+    def update_folder_combo(self):
+        """Refreshes the combo box from self.folder_categories."""
+        active_id = self.combo_folders.get_active_text()
+        self.combo_folders.remove_all()
+        
+        for name in self.folder_categories:
+            self.combo_folders.append_text(name)
+            
+        if active_id in self.folder_categories:
+            # Setting active by text is tricky in simple combo
+            # We iterate to find index
+            idx = 0
+            found = False
+            for name in self.folder_categories:
+                if name == active_id:
+                    self.combo_folders.set_active(idx)
+                    found = True
+                    break
+                idx += 1
+            if not found and self.folder_categories:
+                 self.combo_folders.set_active(0)
+        elif self.folder_categories:
+            self.combo_folders.set_active(0)
+
+    def on_manage_folders_clicked(self, widget):
+        dialog = ManageFoldersDialog(self, self.folder_categories)
+        dialog.run()
+        dialog.destroy()
+        
+    def _load_categories_from_config(self):
+        """Loads categories into self.folder_categories dict."""
+        self.folder_categories = {}
+        if self.config.has_section("FolderCategories"):
+            for name, path in self.config.items("FolderCategories"):
+                self.folder_categories[name] = path
+        
+        # If empty, add Default
+        if not self.folder_categories:
+             # Try to recover legacy folder setting if not already migrated? 
+             # (Migration logic is in ConfigManager, so it should be there)
+             pass 
 
     def update_current_wallpaper_label(self):
         history_file = os.path.join(CONFIG_DIR, "history.log")
@@ -647,7 +787,11 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
     def on_save_clicked(self, widget):
         source = self.combo_source.get_active_text()
-        folder = self.entry_folder.get_text()
+        
+        # Get folder path from selected category
+        cat_name = self.combo_folders.get_active_text()
+        folder = self.folder_categories.get(cat_name, "") if cat_name else ""
+        
         recursive_search = self.check_recursive.get_active()
         keywords = self.entry_keywords.get_text()
         unsplash_api_key = self.entry_unsplash_api_key.get_text()
@@ -662,19 +806,28 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         hex_color = "#{:02x}{:02x}{:02x}".format(int(bg_color.red * 255), int(bg_color.green * 255), int(bg_color.blue * 255))
 
         settings_dict = {
-            "source": source,
+            "source": source or "Local Folder",
             "folder": folder,
             "recursive_search": str(recursive_search),
             "keywords": keywords,
             "unsplash_api_key": unsplash_api_key,
-            "mode": mode,
+            "mode": mode or "zoom",
             "interval": str(interval),
             "startup": str(startup),
-            "effect": effect,
-            "multi_monitor_mode": multi_monitor_mode,
-            "theme": theme,
+            "effect": effect or "None",
+            "multi_monitor_mode": multi_monitor_mode or "Single image on all monitors",
+            "theme": theme or "Ubuntu",
             "background_color": hex_color,
         }
+
+        # Save custom colors if theme is Custom
+        if theme == "Custom":
+            def get_hex(btn):
+                rgba = btn.get_rgba()
+                return "#{:02x}{:02x}{:02x}".format(int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255))
+            settings_dict["custom_background"] = get_hex(self.btn_custom_bg)
+            settings_dict["custom_foreground"] = get_hex(self.btn_custom_fg)
+            settings_dict["custom_accent"] = get_hex(self.btn_custom_accent)
 
         if not self.config_manager.save_settings(self.config, settings_dict):
             return
@@ -705,14 +858,28 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
             if exec_path == sys.executable:
                 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                # Use escape_systemd_path for robust quoting/escaping
+                # Use escape_systemd_path for robust quoting/escaping of ExecStart
                 esc_exec = escape_systemd_path(exec_path)
                 exec_start_cmd = f"{esc_exec} -m wallshuffle --change"
-                working_dir = escape_systemd_path(project_root)
+                # WorkingDirectory must NOT be quoted - systemd expects raw absolute path
+                working_dir = project_root
             else:
                 esc_exec = escape_systemd_path(exec_path)
                 exec_start_cmd = f"{esc_exec} --change"
-                working_dir = escape_systemd_path(os.path.expanduser("~"))
+                # WorkingDirectory must NOT be quoted - systemd expects raw absolute path
+                working_dir = os.path.expanduser("~")
+
+            # Capture critical environment variables for the background job
+            env_vars = f'Environment="DBUS_SESSION_BUS_ADDRESS={dbus_address}"\n'
+            
+            # GSettings and DE detection rely on these
+            if "DISPLAY" in os.environ:
+                 env_vars += f'Environment="DISPLAY={os.environ["DISPLAY"]}"\n'
+            if "XDG_CURRENT_DESKTOP" in os.environ:
+                 env_vars += f'Environment="XDG_CURRENT_DESKTOP={os.environ["XDG_CURRENT_DESKTOP"]}"\n'
+            # Also capture DESKTOP_SESSION as backup
+            if "DESKTOP_SESSION" in os.environ:
+                 env_vars += f'Environment="DESKTOP_SESSION={os.environ["DESKTOP_SESSION"]}"\n'
 
             service_content = f"""[Unit]
 Description=WallShuffle Service
@@ -721,23 +888,18 @@ Description=WallShuffle Service
 Type=oneshot
 WorkingDirectory={working_dir}
 ExecStart={exec_start_cmd}
-Environment="DBUS_SESSION_BUS_ADDRESS={dbus_address}"
+{env_vars}
 """
             with open(os.path.join(systemd_path, "wallpaper-changer.service"), "w") as f:
                 f.write(service_content)
 
-            timer_section_items = ["[Timer]"]
-            if interval > 0:
-                timer_section_items.append(f"OnUnitActiveSec={interval}min")
-            if startup:
-                timer_section_items.append("OnBootSec=2min")
-
-            timer_section_str = "\n".join(timer_section_items)
-
             timer_content = f"""[Unit]
 Description=Run WallShuffle periodically
 
-{timer_section_str}
+[Timer]
+OnUnitActiveSec={interval}min
+OnActiveSec=1s
+OnBootSec=2min
 
 [Install]
 WantedBy=timers.target
@@ -766,4 +928,103 @@ WantedBy=timers.target
 
         except Exception as e:
             logging.error(f"Error executing systemctl commands: {e}")
+
+class ManageFoldersDialog(Gtk.Dialog):
+    def __init__(self, parent, categories):
+        super().__init__(title="Manage Folder Sources", transient_for=parent, flags=0)
+        self.add_buttons(
+            Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE
+        )
+        self.set_default_size(500, 350)
+        self.categories = categories # Dict of Name: Path
+        self.parent_window = parent
+
+        box = self.get_content_area()
+        box.set_spacing(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+
+        # List Store: Name, Path
+        self.store = Gtk.ListStore(str, str)
+        for name, path in self.categories.items():
+            self.store.append([name, path])
+
+        # TreeView
+        self.tree = Gtk.TreeView(model=self.store)
+        
+        renderer_text = Gtk.CellRendererText()
+        col_name = Gtk.TreeViewColumn("Name", renderer_text, text=0)
+        col_name.set_sort_column_id(0)
+        self.tree.append_column(col_name)
+        
+        col_path = Gtk.TreeViewColumn("Path", renderer_text, text=1)
+        self.tree.append_column(col_path)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.add(self.tree)
+        box.pack_start(scroll, True, True, 0)
+
+        # Buttons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        
+        btn_add = Gtk.Button(label="Add Folder")
+        btn_add.connect("clicked", self.on_add_clicked)
+        btn_box.pack_start(btn_add, False, False, 0)
+
+        btn_remove = Gtk.Button(label="Remove")
+        btn_remove.connect("clicked", self.on_remove_clicked)
+        btn_box.pack_start(btn_remove, False, False, 0)
+
+        box.pack_start(btn_box, False, False, 0)
+        
+        self.show_all()
+
+    def on_add_clicked(self, widget):
+        dialog = Gtk.FileChooserDialog(
+            title="Select Folder",
+            parent=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK,
+        )
+        
+        if dialog.run() == Gtk.ResponseType.OK:
+            path = dialog.get_filename()
+            dialog.destroy()
+            
+            # Ask for a name
+            name_dialog = Gtk.Dialog(title="Category Name", parent=self, flags=0)
+            name_dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK, Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+            content = name_dialog.get_content_area()
+            entry = Gtk.Entry()
+            entry.set_placeholder_text("e.g., Nature, Cars")
+            content.pack_start(Gtk.Label(label="Enter a name for this folder check:"), False, False, 10)
+            content.pack_start(entry, False, False, 10)
+            name_dialog.show_all()
+            
+            if name_dialog.run() == Gtk.ResponseType.OK:
+                name = entry.get_text().strip()
+                if name and name not in self.categories:
+                    self.store.append([name, path])
+                    self.categories[name] = path
+                    self.parent_window.save_folder_categories() # Auto-save
+                elif name in self.categories:
+                    show_error_dialog("Category name already exists detected.", parent=self)
+            name_dialog.destroy()
+        else:
+            dialog.destroy()
+
+    def on_remove_clicked(self, widget):
+        selection = self.tree.get_selection()
+        model, iter = selection.get_selected()
+        if iter:
+            name = model[iter][0]
+            del self.categories[name]
+            model.remove(iter)
+            self.parent_window.save_folder_categories() # Auto-save
             GLib.idle_add(show_error_dialog, f"Error configuring systemd services: {e}", self)

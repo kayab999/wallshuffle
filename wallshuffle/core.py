@@ -106,8 +106,10 @@ def change_wallpaper() -> WallpaperUpdateResult:
 
                 found_images = []
                 if recursive_search:
-                    # Recursive search with safe symlink following
+                    # Recursive search with safe symlink following and bounded depth
                     visited_dirs = set()
+                    MAX_DEPTH = 50
+                    
                     for root, dirs, files in os.walk(folder, followlinks=True):
                         # Detect loops
                         try:
@@ -117,6 +119,17 @@ def change_wallpaper() -> WallpaperUpdateResult:
                                 logging.warning(f"Symlink loop detected or already visited: {root} -> {real_root}. Skipping.")
                                 dirs[:] = [] # Don't recurse further
                                 continue
+                            
+                            # Bounded depth check (prevent infinite recursion attacks)
+                            # Calculate depth relative to the start folder
+                            start_depth = folder.rstrip(os.sep).count(os.sep)
+                            current_depth = root.rstrip(os.sep).count(os.sep)
+                            if (current_depth - start_depth) > MAX_DEPTH:
+                                logging.warning(f"Maximum directory traversal depth ({MAX_DEPTH}) exceeded at {root}. a dir.")
+                                dirs[:] = []
+                                # continue instead of break to allow siblings, but walk modifies dirs in-place to stop recursion down this path
+                                continue
+                                
                             visited_dirs.add(real_root)
                         except OSError as e:
                              logging.warning(f"Error resolving path {root}: {e}. Skipping loop check.")
