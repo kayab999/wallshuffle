@@ -14,18 +14,18 @@ THEMES = {
         "button_text": "#FFFFFF",
     },
     "Fedora": {
-        "background": "#FFFFFF",  # fondo blanco
-        "foreground": "#000000",  # texto negro
-        "accent": "#294172",  # azul Fedora
-        "hover": "#3C5DA6",  # azul más claro
+        "background": "#0B2B4A",  # dark blue
+        "foreground": "#FFFFFF",  # white
+        "accent": "#294172",  # blue Fedora
+        "hover": "#3C5DA6",  # lighter blue
         "button_text": "#FFFFFF",
     },
     "LinuxMint": {
-        "background": "#F5F5F5",  # light gray
-        "foreground": "#333333",  # dark gray
+        "background": "#1A1A1A",  # charcoal
+        "foreground": "#FFFFFF",  # white
         "accent": "#87CF3E",  # green
         "hover": "#A3E046",  # lighter green
-        "button_text": "#333333",
+        "button_text": "#FFFFFF",
     },
     "Nord": {
         "background": "#2E3440",

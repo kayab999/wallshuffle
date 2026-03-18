@@ -130,9 +130,24 @@ class WallpaperManager:
                 try:
                     if subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=2).returncode == 0:
                         return de_name
-                except Exception:
+                except subprocess.CalledProcessError:
+                    # Process not running (expected, continue checking)
                     continue
+                except subprocess.TimeoutExpired:
+                    self.logger.warning(f"DE detection timeout for process '{proc_name}'")
+                    continue
+                except (FileNotFoundError, PermissionError) as e:
+                    self.logger.warning(f"DE detection failed for '{proc_name}': {e}")
+                    continue
+                except Exception as e:
+                    # Unexpected error - log it for debugging
+                    self.logger.debug(f"Unexpected error checking process '{proc_name}': {e}")
+                    continue
+        else:
+            self.logger.warning("pgrep not found. Cannot detect DE via process inspection.")
 
+        # If we reach here, we couldn't detect DE via any method
+        self.logger.warning("Could not detect desktop environment via any method. Returning 'unknown'.")
         return "unknown"
 
     def _run_subprocess(self, command, description="", timeout=10):
@@ -236,10 +251,10 @@ class WallpaperManager:
             self.logger.error(f"Composite image failed: {e}")
             return image_path
 
-    def create_multi_monitor_composite(self, image_paths, monitor_info):
+    def create_multi_monitor_composite(self, image_paths, monitor_info, mode="zoom"):
         """
         Creates a single large image by stitching multiple images together
-        based on the monitor layout. Used for GNOME.
+        based on the monitor layout and the selected scaling mode.
         """
         if not monitor_info or not image_paths:
             return image_paths[0] if image_paths else None
@@ -263,42 +278,139 @@ class WallpaperManager:
 
                 try:
                     with Image.open(img_path) as img:
-                        # Resize/Crop to fill the monitor area (Cover mode)
                         target_w = monitor["width"]
                         target_h = monitor["height"]
 
                         img_ratio = img.width / img.height
                         target_ratio = target_w / target_h
 
-                        if img_ratio > target_ratio:
-                            # Image is wider than target: Crop width
-                            if img_ratio == 0:
-                                self.logger.error(f"Image {img_path} has zero ratio (invalid dimensions). Skipping.")
-                                continue
+                        # Apply scaling based on mode
+                        if mode == "zoom":
+                            # Zoom/Cover: Resize to fill, crop excess
 
-                            new_height = target_h
-                            new_width = int(new_height * img_ratio)
+                            if img_ratio > target_ratio:
+                                new_height = target_h
+                                new_width = int(new_height * img_ratio)
+                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                left = (new_width - target_w) // 2
+                                final_img = resized.crop((left, 0, left + target_w, target_h))
+                            else:
+                                new_width = target_w
+                                new_height = int(new_width / img_ratio)
+                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                top = (new_height - target_h) // 2
+                                final_img = resized.crop((0, top, target_w, top + target_h))
+
+                        elif mode == "scaled":
+                            # Scaled/Fit: Resize to fit inside, black bars
+                            if img_ratio > target_ratio:
+                                # Wider than screen: Fit Width
+                                new_width = target_w
+                                new_height = int(new_width / img_ratio)
+                            else:
+                                # Taller than screen: Fit Height
+                                new_height = target_h
+                                new_width = int(new_height * img_ratio)
+
                             resized = img.resize((new_width, new_height), Image.LANCZOS)
-                            # Crop center
-                            left = (new_width - target_w) // 2
-                            cropped = resized.crop((left, 0, left + target_w, target_h))
+
+                            # Create black background for this monitor patch
+                            bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+                            # Center the resized image
+                            offset_x = (target_w - new_width) // 2
+                            offset_y = (target_h - new_height) // 2
+                            bg.paste(resized, (offset_x, offset_y))
+                            final_img = bg
+
+                        elif mode == "stretched":
+                            # Stretched: Resize to exact dimensions (distorted)
+                            final_img = img.resize((target_w, target_h), Image.LANCZOS)
+
+                        elif mode == "centered":
+                            # Centered: No resizing, just crop or center
+                            # Create black background
+                            bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+                            # Calculate offset to center the original image
+                            offset_x = (target_w - img.width) // 2
+                            offset_y = (target_h - img.height) // 2
+                            bg.paste(img, (offset_x, offset_y))
+                            final_img = bg # If image is larger, paste creates crop effect naturally?
+                            # PIL paste handles larger images by cropping them, but only if we paste onto a canvas
+                            # However, if offset is negative (image larger), we need to crop the image first
+                            if offset_x < 0 or offset_y < 0:
+                                # Logic to crop center of image to fit monitor
+                                # But standard "center" usually just shows center pixels.
+                                # Let's stick to simple paste, but we might need to crop if image > monitor
+                                # Actually `paste` does not crop automatically in a way that centers.
+                                # It just pastes top-left at the given coordinate.
+                                # If coordinate is negative, it pastes off-canvas.
+                                pass
+                            # Re-doing Center logic to be robust:
+                            bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+
+                            # Caclulate crop from source image if it's larger than target
+                            if img.width > target_w:
+                                left = (img.width - target_w) // 2
+                                img_crop_w = img.crop((left, 0, left + target_w, img.height))
+                            else:
+                                img_crop_w = img
+
+                            if img_crop_w.height > target_h:
+                                top = (img_crop_w.height - target_h) // 2
+                                final_img_content = img_crop_w.crop((0, top, img_crop_w.width, top + target_h))
+                            else:
+                                final_img_content = img_crop_w
+
+                            # Calculate paste position for the (potentially cropped) image
+                            paste_x = (target_w - final_img_content.width) // 2
+                            paste_y = (target_h - final_img_content.height) // 2
+                            bg.paste(final_img_content, (paste_x, paste_y))
+                            final_img = bg
+
+                        elif mode == "spanned":
+                             # Spanned on a per-monitor basis acts like zoom/cover usually
+                             final_img = img.resize((target_w, target_h), Image.LANCZOS) # Fallback to stretch/zoom?
+                             # Actually spanned usually means one big image across all.
+                             # But here we are in "Different image on each monitor" flow.
+                             # So "spanned" doesn't make sense per monitor. Treat as zoom.
+                             # Reuse Zoom logic (condensed for brevity, or just call it recursively? No, infinite loop risk)
+                             # Just duplicate zoom logic or fallthrough to zoom default
+                             # Let's fallback to zoom
+                             img_ratio = img.width / img.height
+                             target_ratio = target_w / target_h
+                             if img_ratio > target_ratio:
+                                 new_height = target_h
+                                 new_width = int(new_height * img_ratio)
+                                 resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                 left = (new_width - target_w) // 2
+                                 final_img = resized.crop((left, 0, left + target_w, target_h))
+                             else:
+                                 new_width = target_w
+                                 new_height = int(new_width / img_ratio)
+                                 resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                 top = (new_height - target_h) // 2
+                                 final_img = resized.crop((0, top, target_w, top + target_h))
                         else:
-                            # Image is taller than target: Crop height
-                            if img_ratio == 0:
-                                self.logger.error(f"Image {img_path} has zero ratio (invalid dimensions). Skipping.")
-                                continue
-
-                            new_width = target_w
-                            new_height = int(new_width / img_ratio)
-                            resized = img.resize((new_width, new_height), Image.LANCZOS)
-                            # Crop center
-                            top = (new_height - target_h) // 2
-                            cropped = resized.crop((0, top, target_w, top + target_h))
+                            # Default to zoom
+                            img_ratio = img.width / img.height
+                            target_ratio = target_w / target_h
+                            if img_ratio > target_ratio:
+                                new_height = target_h
+                                new_width = int(new_height * img_ratio)
+                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                left = (new_width - target_w) // 2
+                                final_img = resized.crop((left, 0, left + target_w, target_h))
+                            else:
+                                new_width = target_w
+                                new_height = int(new_width / img_ratio)
+                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                top = (new_height - target_h) // 2
+                                final_img = resized.crop((0, top, target_w, top + target_h))
 
                         # Paste into canvas
                         paste_x = monitor["x"] - min_x
                         paste_y = monitor["y"] - min_y
-                        canvas.paste(cropped, (paste_x, paste_y))
+                        canvas.paste(final_img, (paste_x, paste_y))
 
                 except Exception as e:
                     self.logger.error(f"Error processing image {img_path} for monitor {monitor['name']}: {e}")
@@ -308,7 +420,7 @@ class WallpaperManager:
             os.makedirs(temp_dir, exist_ok=True)
             path = os.path.join(temp_dir, "stitched_wallpaper.jpg")
             canvas.save(path, quality=95)
-            self.logger.info(f"Created stitched wallpaper: {path} ({total_width}x{total_height})")
+            self.logger.info(f"Created stitched wallpaper: {path} ({total_width}x{total_height}) with mode '{mode}'")
             return path
 
         except Exception as e:
@@ -350,8 +462,8 @@ class WallpaperManager:
         if len(image_paths) > 1:
             monitor_info = self.get_monitor_info()
             if len(monitor_info) > 1:
-                self.logger.info("Multiple images and monitors detected for GNOME. Using Virtual Stitching.")
-                final_path = self.create_multi_monitor_composite(image_paths, monitor_info)
+                self.logger.info(f"Multiple images and monitors detected for GNOME. Using Virtual Stitching with mode '{mode}'.")
+                final_path = self.create_multi_monitor_composite(image_paths, monitor_info, mode)
                 mode = "spanned" # Force spanned to display the stitched image correctly
 
         # Mode & Color

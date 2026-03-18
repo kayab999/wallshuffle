@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=WallShuffle
+Comment=Lightweight, privacy-first wallpaper manager
+Exec=wallshuffle
+Icon=com.carlos.WallShuffle
+Terminal=false
+Type=Application
+Categories=Settings;DesktopSettings;
+Keywords=wallpaper;background;changer;shuffle;
+StartupNotify=true
+X-GNOME-Autostart-enabled=true

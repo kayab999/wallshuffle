@@ -10,7 +10,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .utils import CONFIG_DIR, show_error_dialog
+from .utils import CONFIG_DIR
+from .gui_helpers import show_error_dialog
 
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 CACHE_EXPIRATION_HOURS = 24
@@ -242,7 +243,7 @@ class OnlineSourceManager:
 
         now = time.time()
         expiration_seconds = CACHE_EXPIRATION_HOURS * 3600
-        
+
         logging.info("Starting cache cleanup...")
         removed_count = 0
         try:

@@ -1,0 +1,15 @@
+Source: wallshuffle
+Section: utils
+Priority: optional
+Maintainer: Carlos <carlos@example.com>
+Build-Depends: debhelper-compat (= 13), python3-all, python3-setuptools
+Standards-Version: 4.5.1
+Homepage: https://github.com/carlos/wallshuffle
+
+Package: wallshuffle
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3-gi, gir1.2-gtk-3.0, python3-pil, python3-requests
+Description: A professional wallpaper manager for Linux desktops
+ WallShuffle is a premium, privacy-first wallpaper manager designed for GNOME, KDE, and XFCE.
+ It features high-quality Unsplash integration, local image effects (Blur, Sepia, Grayscale),
+ and robust multi-monitor support.

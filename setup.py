@@ -26,4 +26,9 @@ setup(
         'Operating System :: POSIX :: Linux',
     ],
     python_requires='>=3.8',
+    data_files=[
+        ('share/applications', ['data/com.carlos.WallShuffle.desktop']),
+        ('share/metainfo', ['data/com.carlos.WallShuffle.metainfo.xml']),
+        ('share/icons/hicolor/256x256/apps', ['assets/icon.png']),
+    ],
 )

@@ -1,12 +1,13 @@
+# ruff: noqa: E402
 import datetime
 import logging
 
 import gi
 
-from .themes import THEMES  # ruff: noqa: E402
+from .themes import THEMES
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # ruff: noqa: E402
+from gi.repository import Gtk
 
 
 class ThemeManager:
@@ -21,12 +22,16 @@ class ThemeManager:
 
         if saved_theme and saved_theme in THEMES:
             self.current_theme_name = saved_theme
+            logging.info(f"Loaded saved theme: {self.current_theme_name}")
         else:
             # If no theme is saved (first run) or saved theme is invalid, detect distro
             distro_name = self.detect_distro()
+            if distro_name:
+                distro_name = distro_name.lower()
             # Match detected distro name (e.g., "ubuntu") with theme key (e.g., "Ubuntu")
             theme_key = next((k for k in THEMES.keys() if k.lower() == distro_name), "Default")
             self.current_theme_name = theme_key
+            logging.info(f"Auto-detected theme based on distro '{distro_name}': {self.current_theme_name}")
             # Save the auto-detected theme so it persists
             self.set_theme_name(self.current_theme_name)
 
@@ -55,7 +60,7 @@ class ThemeManager:
     def get_css_provider(self):
         """Builds and returns a Gtk.CssProvider for the active theme."""
         theme = THEMES.get(self.current_theme_name, THEMES["Ubuntu"])
-        
+
         # If theme is Custom, override values with those from config
         if self.current_theme_name == "Custom":
             theme = theme.copy() # Don't mutate the original dictionary
@@ -75,7 +80,7 @@ class ThemeManager:
     font-weight: bold;
     font-size: 1.2em;
     margin-bottom: 10px;
-    color: {theme["accent"]}; 
+    color: {theme["accent"]};
 }}
 
 /* Dim Labels */
@@ -119,7 +124,7 @@ entry.flat {{
 
 /* Suggested Action Button (Save) */
 .suggested-action {{
-    background-color: {theme.get("accent_secondary", theme["accent"])}; 
+    background-color: {theme.get("accent_secondary", theme["accent"])};
     color: #ffffff;
 }}
 

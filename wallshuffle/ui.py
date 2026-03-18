@@ -11,36 +11,15 @@ from .constants import SUPPORTED_EXTENSIONS
 from .core import WallpaperUpdateResult, change_wallpaper
 from .online_sources import OnlineSourceManager
 from .themes import THEMES
-from .utils import CONFIG_DIR, escape_systemd_path, show_error_dialog
+from .utils import CONFIG_DIR, escape_systemd_path
+from .gui_helpers import show_error_dialog
 from .wallpaper_manager import WallpaperManager
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 
-def _find_executable_for_systemd():
-    """
-    Devuelve la ruta estable que systemd debe ejecutar para invocar wallshuffle --change.
-    Preferimos: user-installed wrapper (which wallshuffle) -> APPIMAGE wrapper -> sys.executable.
-    """
-    # 1) Preferir el ejecutable instalable en PATH (editable install o wrapper)
-    exe = shutil.which("wallshuffle")
-    if exe:
-        return exe
-
-    # 2) Si estamos corriendo dentro de AppImage y existe un wrapper instalado, preferirlo.
-    appimage_path = os.environ.get("APPIMAGE")
-    if appimage_path:
-        # Posible ubicación recomendada del AppImage en instalación de usuario
-        user_appimage = os.path.expanduser("~/Applications/WallShuffle.AppImage")
-        if os.path.isfile(user_appimage) and os.access(user_appimage, os.X_OK):
-            return user_appimage
-        # Si no, usar APPIMAGE path directo (menos ideal, pero explícito)
-        if os.path.isfile(appimage_path) and os.access(appimage_path, os.X_OK):
-            return appimage_path
-
-    # 3) Fallback: sys.executable (dev mode)
-    return sys.executable
+from .system_integration import setup_systemd_timer
 
 
 class WallpaperAppWindow(Gtk.ApplicationWindow):
@@ -65,7 +44,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.theme_manager = self.app.theme_manager
 
         # Initialize data lists
-        self.sources = ["Local Folder", "Unsplash"]
+        self.sources = ["Local Folder", "Unsplash", "URL / Hyperlink"]
         self.modes = ["zoom", "scaled", "centered", "spanned", "stretched"]
         self.effects = ["None", "Grayscale", "Blur", "Sepia"]
         self.multi_monitor_modes = [
@@ -147,8 +126,14 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.btn_save.connect("clicked", self.on_save_clicked)
         header.pack_end(self.btn_save)
 
+        self.btn_about = Gtk.Button()
+        self.btn_about.set_image(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_about.set_tooltip_text("General Information")
+        self.btn_about.connect("clicked", self.on_about_clicked)
+        header.pack_end(self.btn_about)
+
         self.btn_apply_now = Gtk.Button(label="Next Wallpaper")
-        self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("media-skip-forward-symbolic", Gtk.IconSize.BUTTON))
         self.btn_apply_now.connect("clicked", self.on_next_wallpaper_clicked)
         header.pack_start(self.btn_apply_now)
 
@@ -157,7 +142,9 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.info_bar_de.set_message_type(Gtk.MessageType.WARNING)
         self.info_bar_de.set_no_show_all(True)
         content_area = self.info_bar_de.get_content_area()
-        content_area.add(Gtk.Label(label="Your desktop environment is not officially supported."))
+        lbl = Gtk.Label(label="Your desktop environment is not officially supported. Automatic changes may fail. Check the README for details.")
+        lbl.set_line_wrap(True)
+        content_area.add(lbl)
         self.info_bar_de.set_visible(not self.is_de_supported)
         parent.pack_start(self.info_bar_de, False, False, 0)
 
@@ -213,14 +200,14 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Local Page
         page_local = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         hbox_folder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        
+
         self.combo_folders = Gtk.ComboBoxText()
         self.combo_folders.set_hexpand(True)
         self.combo_folders.connect("changed", self.on_folder_changed)
-        
+
         self.btn_manage_folders = Gtk.Button(label="Manage Sources...")
         self.btn_manage_folders.connect("clicked", self.on_manage_folders_clicked)
-        
+
         hbox_folder.pack_start(self.combo_folders, True, True, 0)
         hbox_folder.pack_start(self.btn_manage_folders, False, False, 0)
         self.check_recursive = Gtk.CheckButton(label="Include subfolders")
@@ -238,6 +225,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.entry_unsplash_api_key = Gtk.Entry()
         self.entry_unsplash_api_key.set_visibility(False)
         self.entry_unsplash_api_key.set_placeholder_text("Unsplash Access Key")
+        self.entry_unsplash_api_key.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
+        self.entry_unsplash_api_key.connect("icon-press", self.on_api_key_visibility_toggle)
         self.entry_unsplash_api_key.connect("changed", self.validate_api_key)
 
         self.lbl_keywords = Gtk.Label(label="Keywords:")
@@ -253,6 +242,20 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         page_unsplash.attach(self.lbl_keywords, 0, 1, 1, 1)
         page_unsplash.attach(self.entry_keywords, 1, 1, 2, 1)
         self.stack_source.add_named(page_unsplash, "Unsplash")
+
+        # URL Page
+        page_url = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.entry_url = Gtk.Entry()
+        self.entry_url.set_placeholder_text("https://example.com/wallpaper.jpg")
+        self.entry_url.set_hexpand(True)
+        lbl_url = Gtk.Label(label="Image URL:")
+        lbl_url.set_halign(Gtk.Align.START)
+        def on_url_changed(widget):
+            self.lbl_source_status.set_text("✓ Online image" if widget.get_text().startswith("http") else "⚠ Enter a valid URL")
+        self.entry_url.connect("changed", on_url_changed)
+        page_url.pack_start(lbl_url, False, False, 0)
+        page_url.pack_start(self.entry_url, False, False, 0)
+        self.stack_source.add_named(page_url, "URL / Hyperlink")
 
     def _build_settings_section(self, parent):
         lbl_section = Gtk.Label(label="Settings")
@@ -300,19 +303,19 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Custom Theme Colors (Initally hidden)
         self.box_custom_colors = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.box_custom_colors.pack_start(Gtk.Label(label="Custom Colors:"), False, False, 0)
-        
+
         self.btn_custom_bg = Gtk.ColorButton()
         self.btn_custom_bg.set_tooltip_text("Background Color")
         self.box_custom_colors.pack_start(self.btn_custom_bg, False, False, 0)
-        
+
         self.btn_custom_fg = Gtk.ColorButton()
         self.btn_custom_fg.set_tooltip_text("Foreground Color")
         self.box_custom_colors.pack_start(self.btn_custom_fg, False, False, 0)
-        
+
         self.btn_custom_accent = Gtk.ColorButton()
         self.btn_custom_accent.set_tooltip_text("Accent Color")
         self.box_custom_colors.pack_start(self.btn_custom_accent, False, False, 0)
-        
+
         parent.pack_start(self.box_custom_colors, False, False, 0)
 
         # Automation
@@ -336,6 +339,11 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             self.combo_multi_monitor.append_text(m)
         self.combo_multi_monitor.connect("changed", self.on_multi_monitor_changed)
         grid.attach(self.combo_multi_monitor, 1, 3, 3, 1)
+        
+        # Random Order (Moved out of Automation for visibility)
+        grid.attach(Gtk.Label(label="Sequence:", halign=Gtk.Align.START), 0, 4, 1, 1)
+        self.check_random_order = Gtk.CheckButton(label="Random Order")
+        grid.attach(self.check_random_order, 1, 4, 1, 1)
 
     def _apply_de_restrictions(self):
         self.combo_source.set_sensitive(False)
@@ -353,7 +361,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         theme_name = cb.get_active_text()
         if theme_name and self.app and hasattr(self.app, "theme_manager"):
             self.app.theme_manager.set_theme_name(theme_name)
-            
+
             # Show/hide custom color pickers
             if theme_name == "Custom":
                 self.box_custom_colors.show_all()
@@ -433,7 +441,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
         # Explicitly handle empty or invalid
         self.lbl_source_status.set_text("⚠ Select a valid category")
-        
+
     def validate_api_key(self, widget):
         key = widget.get_text()
         if len(key) < 20 and key != "":  # Arbitrary check for length
@@ -455,14 +463,23 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             tooltip = "Select how the image should be scaled on the screen."
         self.combo_mode.set_tooltip_text(tooltip)
 
+    def on_api_key_visibility_toggle(self, entry, icon_pos, event):
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
+            visible = entry.get_visibility()
+            entry.set_visibility(not visible)
+            icon_name = "view-conceal-symbolic" if not visible else "view-reveal-symbolic"
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, icon_name)
+
     def on_source_changed(self, combo):
         text = combo.get_active_text()
         if hasattr(self, 'stack_source'):
-            child = "Local Folder" if text == "Local Folder" else "Unsplash"
+            child = text if text in self.sources else "Local Folder"
             self.stack_source.set_visible_child_name(child)
 
             if text == "Local Folder":
                  self.update_image_count()
+            elif text == "URL / Hyperlink":
+                 self.lbl_source_status.set_text("✓ Online image" if (hasattr(self, 'entry_url') and self.entry_url.get_text().startswith("http")) else "⚠ Enter a valid URL")
             else:
                  self.lbl_source_status.set_text("✓ Unsplash Source")
 
@@ -509,7 +526,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
         if "Settings" in self.config:
             settings = self.config["Settings"]
-            
+
             # Ensure valid values and avoid None
             def safe_set_active(combo, value, options):
                 if value in options:
@@ -527,7 +544,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 if path == saved_Folder:
                     found_cat = name
                     break
-            
+
             # Set active using simple iteration as safe_set_active is generic
             if found_cat:
                 # find index of found_cat
@@ -551,22 +568,27 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
             self.spin_interval.set_value(self.config_manager.get_setting(self.config, "Settings", "interval", 30, value_type=int))
             self.check_startup.set_active(self.config_manager.get_setting(self.config, "Settings", "startup", False, value_type=bool))
+            self.check_random_order.set_active(self.config_manager.get_setting(self.config, "Settings", "random_order", True, value_type=bool))
 
             effect = settings.get("effect", "None")
             safe_set_active(self.combo_effect, effect, self.effects)
 
             multi_monitor_mode = settings.get("multi_monitor_mode", "Single image on all monitors")
             safe_set_active(self.combo_multi_monitor, multi_monitor_mode, self.multi_monitor_modes)
+            
+            url = settings.get("hyperlink_url", "")
+            if hasattr(self, 'entry_url'):
+                self.entry_url.set_text(url)
 
             # Theme loading
             theme_name = settings.get("theme", "Ubuntu")
             theme_keys = list(THEMES.keys())
             safe_set_active(self.combo_theme, theme_name, theme_keys)
-            
+
             # Visibility for custom colors
             if theme_name == "Custom":
                 self.box_custom_colors.show_all()
-                
+
                 # Load custom colors
                 def parse_and_set(btn, color_str, default="#000000"):
                     c = Gdk.RGBA()
@@ -646,10 +668,10 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         """Refreshes the combo box from self.folder_categories."""
         active_id = self.combo_folders.get_active_text()
         self.combo_folders.remove_all()
-        
+
         for name in self.folder_categories:
             self.combo_folders.append_text(name)
-            
+
         if active_id in self.folder_categories:
             # Setting active by text is tricky in simple combo
             # We iterate to find index
@@ -670,19 +692,19 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         dialog = ManageFoldersDialog(self, self.folder_categories)
         dialog.run()
         dialog.destroy()
-        
+
     def _load_categories_from_config(self):
         """Loads categories into self.folder_categories dict."""
         self.folder_categories = {}
         if self.config.has_section("FolderCategories"):
             for name, path in self.config.items("FolderCategories"):
                 self.folder_categories[name] = path
-        
+
         # If empty, add Default
         if not self.folder_categories:
-             # Try to recover legacy folder setting if not already migrated? 
+             # Try to recover legacy folder setting if not already migrated?
              # (Migration logic is in ConfigManager, so it should be there)
-             pass 
+             pass
 
     def update_current_wallpaper_label(self):
         history_file = os.path.join(CONFIG_DIR, "history.log")
@@ -773,6 +795,9 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.btn_apply_now.set_sensitive(True)
 
     def on_next_wallpaper_clicked(self, widget):
+        # Auto-save current settings before refreshing so it uses the latest UI state
+        self.on_save_clicked(widget, hide_window=False, skip_timer_setup=True)
+
         def change_and_update():
             result = change_wallpaper()
             GLib.idle_add(self._handle_change_result, result)
@@ -785,19 +810,21 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             logging.critical(f"Error starting wallpaper change thread from GUI: {e}", exc_info=True)
             self.btn_apply_now.set_sensitive(True)  # Re-enable on thread start failure
 
-    def on_save_clicked(self, widget):
+    def on_save_clicked(self, widget, hide_window=True, skip_timer_setup=False):
         source = self.combo_source.get_active_text()
-        
+
         # Get folder path from selected category
         cat_name = self.combo_folders.get_active_text()
         folder = self.folder_categories.get(cat_name, "") if cat_name else ""
-        
+
         recursive_search = self.check_recursive.get_active()
         keywords = self.entry_keywords.get_text()
         unsplash_api_key = self.entry_unsplash_api_key.get_text()
+        hyperlink_url = self.entry_url.get_text() if hasattr(self, 'entry_url') else ""
         mode = self.combo_mode.get_active_text()
         interval = self.spin_interval.get_value_as_int()
         startup = self.check_startup.get_active()
+        random_order = self.check_random_order.get_active()
         effect = self.combo_effect.get_active_text()
         multi_monitor_mode = self.combo_multi_monitor.get_active_text()
         theme = self.combo_theme.get_active_text()
@@ -811,9 +838,11 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             "recursive_search": str(recursive_search),
             "keywords": keywords,
             "unsplash_api_key": unsplash_api_key,
+            "hyperlink_url": hyperlink_url,
             "mode": mode or "zoom",
             "interval": str(interval),
             "startup": str(startup),
+            "random_order": str(random_order),
             "effect": effect or "None",
             "multi_monitor_mode": multi_monitor_mode or "Single image on all monitors",
             "theme": theme or "Ubuntu",
@@ -832,102 +861,124 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         if not self.config_manager.save_settings(self.config, settings_dict):
             return
 
-        # Run systemd setup in background to avoid blocking UI
-        threading.Thread(
-            target=self.setup_systemd_timer,
-            args=(interval, startup),
-            daemon=True
-        ).start()
+        # Only run systemd setup when explicitly saving (not during auto-save for Next Wallpaper)
+        if not skip_timer_setup:
+            def _on_systemd_error(msg):
+                GLib.idle_add(show_error_dialog, msg, self)
 
-        self.hide()
+            # Run systemd setup in background to avoid blocking UI
+            threading.Thread(
+                target=setup_systemd_timer,
+                args=(interval, startup, self.is_systemd_available, self.wallpaper_manager._run_subprocess, _on_systemd_error),
+                daemon=True
+            ).start()
 
-    def setup_systemd_timer(self, interval, startup):
-        if not self.is_systemd_available:
-            logging.warning("Systemd is not available, skipping timer setup (this is expected on non-systemd systems).")
-            # We do not show an error dialog here anymore, as the UI already informs the user about this limitation.
-            return
+        if hide_window:
+            self.hide()
 
-        systemd_path = os.path.join(os.path.expanduser("~"), ".config", "systemd", "user")
+
+    def on_about_clicked(self, widget):
+        dialog = Gtk.Dialog(title="About WallShuffle", parent=self, flags=0)
+        dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
+        dialog.set_default_size(650, 560)
+
+        content_area = dialog.get_content_area()
+        content_area.set_spacing(0)
+
+        # ── Header Section ──
+        header_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        header_box.set_margin_top(18)
+        header_box.set_margin_bottom(12)
+        header_box.set_margin_start(20)
+        header_box.set_margin_end(20)
+
+        lbl_title = Gtk.Label()
+        lbl_title.set_markup(f"<span size='xx-large' weight='bold'>WallShuffle</span>  <span size='small' alpha='60%'>v{__version__}</span>")
+        lbl_title.set_halign(Gtk.Align.CENTER)
+        header_box.pack_start(lbl_title, False, False, 0)
+
+        lbl_tagline = Gtk.Label()
+        lbl_tagline.set_markup("<span alpha='70%'>A lightweight, privacy-first wallpaper manager for Linux desktops.</span>")
+        lbl_tagline.set_halign(Gtk.Align.CENTER)
+        header_box.pack_start(lbl_tagline, False, False, 0)
+
+        content_area.pack_start(header_box, False, False, 0)
+
+        # ── Separator ──
+        content_area.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+
+        # ── README Body ──
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_hexpand(True)
+        scrolled_window.set_vexpand(True)
+        scrolled_window.set_margin_top(8)
+        scrolled_window.set_margin_bottom(8)
+        scrolled_window.set_margin_start(16)
+        scrolled_window.set_margin_end(16)
+
+        textview = Gtk.TextView()
+        textview.set_editable(False)
+        textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        textview.set_cursor_visible(False)
+        textview.set_left_margin(8)
+        textview.set_right_margin(8)
+        textview.set_top_margin(8)
+        textview.set_bottom_margin(8)
+
+        readme_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "README.md"))
         try:
-            os.makedirs(systemd_path, exist_ok=True)
-
-            uid = os.getuid()
-            dbus_address = f"unix:path=/run/user/{uid}/bus"
-
-            exec_path = _find_executable_for_systemd()
-
-            if exec_path == sys.executable:
-                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                # Use escape_systemd_path for robust quoting/escaping of ExecStart
-                esc_exec = escape_systemd_path(exec_path)
-                exec_start_cmd = f"{esc_exec} -m wallshuffle --change"
-                # WorkingDirectory must NOT be quoted - systemd expects raw absolute path
-                working_dir = project_root
-            else:
-                esc_exec = escape_systemd_path(exec_path)
-                exec_start_cmd = f"{esc_exec} --change"
-                # WorkingDirectory must NOT be quoted - systemd expects raw absolute path
-                working_dir = os.path.expanduser("~")
-
-            # Capture critical environment variables for the background job
-            env_vars = f'Environment="DBUS_SESSION_BUS_ADDRESS={dbus_address}"\n'
-            
-            # GSettings and DE detection rely on these
-            if "DISPLAY" in os.environ:
-                 env_vars += f'Environment="DISPLAY={os.environ["DISPLAY"]}"\n'
-            if "XDG_CURRENT_DESKTOP" in os.environ:
-                 env_vars += f'Environment="XDG_CURRENT_DESKTOP={os.environ["XDG_CURRENT_DESKTOP"]}"\n'
-            # Also capture DESKTOP_SESSION as backup
-            if "DESKTOP_SESSION" in os.environ:
-                 env_vars += f'Environment="DESKTOP_SESSION={os.environ["DESKTOP_SESSION"]}"\n'
-
-            service_content = f"""[Unit]
-Description=WallShuffle Service
-
-[Service]
-Type=oneshot
-WorkingDirectory={working_dir}
-ExecStart={exec_start_cmd}
-{env_vars}
-"""
-            with open(os.path.join(systemd_path, "wallpaper-changer.service"), "w") as f:
-                f.write(service_content)
-
-            timer_content = f"""[Unit]
-Description=Run WallShuffle periodically
-
-[Timer]
-OnUnitActiveSec={interval}min
-OnActiveSec=1s
-OnBootSec=2min
-
-[Install]
-WantedBy=timers.target
-"""
-            with open(os.path.join(systemd_path, "wallpaper-changer.timer"), "w") as f:
-                f.write(timer_content)
-        except (IOError, OSError) as e:
-            logging.error(f"File I/O error setting up systemd timer files: {e}")
-            GLib.idle_add(show_error_dialog, f"File I/O error setting up systemd timer files: {e}", self)
-            return
+            with open(readme_path, "r", encoding="utf-8") as f:
+                readme_content = f.read()
+            textview.get_buffer().set_text(readme_content)
         except Exception as e:
-            logging.critical(f"An unhandled error occurred during systemd file setup: {e}", exc_info=True)
-            GLib.idle_add(show_error_dialog, f"An unhandled error occurred during systemd file setup: {e}", self)
-            return
+            textview.get_buffer().set_text(f"Could not load README.md: {e}")
 
+        scrolled_window.add(textview)
+        content_area.pack_start(scrolled_window, True, True, 0)
+
+        # ── Footer: Privacy Badge + Donate Button ──
+        content_area.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+
+        footer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        footer_box.set_margin_top(10)
+        footer_box.set_margin_bottom(6)
+        footer_box.set_margin_start(16)
+        footer_box.set_margin_end(16)
+
+        # Privacy badge
+        privacy_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        privacy_icon = Gtk.Image.new_from_icon_name("security-high-symbolic", Gtk.IconSize.SMALL_TOOLBAR)
+        privacy_box.pack_start(privacy_icon, False, False, 0)
+        lbl_privacy = Gtk.Label()
+        lbl_privacy.set_markup("<span size='small' alpha='60%'>Privacy-First · Local Processing · No Telemetry</span>")
+        privacy_box.pack_start(lbl_privacy, False, False, 0)
+        footer_box.pack_start(privacy_box, True, False, 0)
+
+        # Donate button
+        btn_donate = Gtk.Button()
+        btn_donate_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_donate_icon = Gtk.Image.new_from_icon_name("emblem-favorite-symbolic", Gtk.IconSize.BUTTON)
+        btn_donate_box.pack_start(btn_donate_icon, False, False, 0)
+        btn_donate_box.pack_start(Gtk.Label(label="Support Development ☕"), False, False, 0)
+        btn_donate.add(btn_donate_box)
+        btn_donate.get_style_context().add_class("suggested-action")
+        btn_donate.set_tooltip_text("Buy me a coffee to support WallShuffle development!")
+        btn_donate.connect("clicked", self._on_donate_clicked)
+        footer_box.pack_end(btn_donate, False, False, 0)
+
+        content_area.pack_start(footer_box, False, False, 0)
+
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def _on_donate_clicked(self, widget):
+        import subprocess
+        donate_url = "https://buymeacoffee.com/wallshuffle"
         try:
-            if not self.wallpaper_manager._run_subprocess(["systemctl", "--user", "daemon-reload"], "daemon-reload", timeout=5):
-                GLib.idle_add(show_error_dialog, "Failed to run systemctl daemon-reload. Check logs for details.", self)
-
-            if startup:
-                self.wallpaper_manager._run_subprocess(["systemctl", "--user", "enable", "wallpaper-changer.timer"], "enable timer", timeout=5)
-                self.wallpaper_manager._run_subprocess(["systemctl", "--user", "start", "wallpaper-changer.timer"], "start timer", timeout=5)
-            else:
-                self.wallpaper_manager._run_subprocess(["systemctl", "--user", "disable", "wallpaper-changer.timer"], "disable timer", timeout=5)
-                self.wallpaper_manager._run_subprocess(["systemctl", "--user", "stop", "wallpaper-changer.timer"], "stop timer", timeout=5)
-
+            subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
-            logging.error(f"Error executing systemctl commands: {e}")
+            logging.warning(f"Could not open donation URL: {e}")
 
 class ManageFoldersDialog(Gtk.Dialog):
     def __init__(self, parent, categories):
@@ -935,52 +986,93 @@ class ManageFoldersDialog(Gtk.Dialog):
         self.add_buttons(
             Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE
         )
-        self.set_default_size(500, 350)
-        self.categories = categories # Dict of Name: Path
+        self.set_default_size(550, 400)
+        self.categories = categories  # Dict of Name: Path
         self.parent_window = parent
 
         box = self.get_content_area()
-        box.set_spacing(10)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(10)
-        box.set_margin_end(10)
+        box.set_spacing(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
 
-        # List Store: Name, Path
-        self.store = Gtk.ListStore(str, str)
-        for name, path in self.categories.items():
-            self.store.append([name, path])
+        # Header label
+        lbl_header = Gtk.Label()
+        lbl_header.set_markup("<b>Wallpaper Source Folders</b>")
+        lbl_header.set_halign(Gtk.Align.START)
+        box.pack_start(lbl_header, False, False, 0)
 
-        # TreeView
-        self.tree = Gtk.TreeView(model=self.store)
-        
-        renderer_text = Gtk.CellRendererText()
-        col_name = Gtk.TreeViewColumn("Name", renderer_text, text=0)
-        col_name.set_sort_column_id(0)
-        self.tree.append_column(col_name)
-        
-        col_path = Gtk.TreeViewColumn("Path", renderer_text, text=1)
-        self.tree.append_column(col_path)
-
+        # Scrollable ListBox
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
-        scroll.add(self.tree)
-        box.pack_start(scroll, True, True, 0)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
-        # Buttons
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.listbox.get_style_context().add_class("rich-list")
+        scroll.add(self.listbox)
+
+        # Frame around the list for a polished border
+        frame = Gtk.Frame()
+        frame.add(scroll)
+        box.pack_start(frame, True, True, 0)
+
+        # Populate existing categories
+        for name, path in self.categories.items():
+            self._add_row(name, path)
+
+        # Placeholder when empty
+        self.listbox.set_placeholder(Gtk.Label(label="No folders added yet. Click 'Add Folder' below."))
+
+        # Add button
         btn_add = Gtk.Button(label="Add Folder")
+        btn_add.set_image(Gtk.Image.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON))
+        btn_add.set_always_show_image(True)
+        btn_add.set_halign(Gtk.Align.START)
         btn_add.connect("clicked", self.on_add_clicked)
-        btn_box.pack_start(btn_add, False, False, 0)
+        box.pack_start(btn_add, False, False, 0)
 
-        btn_remove = Gtk.Button(label="Remove")
-        btn_remove.connect("clicked", self.on_remove_clicked)
-        btn_box.pack_start(btn_remove, False, False, 0)
-
-        box.pack_start(btn_box, False, False, 0)
-        
         self.show_all()
+
+    def _add_row(self, name, path):
+        row = Gtk.ListBoxRow()
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        hbox.set_margin_top(8)
+        hbox.set_margin_bottom(8)
+        hbox.set_margin_start(12)
+        hbox.set_margin_end(8)
+
+        # Icon
+        icon = Gtk.Image.new_from_icon_name("folder-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
+        hbox.pack_start(icon, False, False, 0)
+
+        # Name + Path stacked vertically
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_name = Gtk.Label(label=name)
+        lbl_name.set_halign(Gtk.Align.START)
+        lbl_name.get_style_context().add_class("heading")
+        vbox.pack_start(lbl_name, False, False, 0)
+
+        lbl_path = Gtk.Label(label=path)
+        lbl_path.set_halign(Gtk.Align.START)
+        lbl_path.set_ellipsize(3)  # Pango.EllipsizeMode.END
+        lbl_path.get_style_context().add_class("dim-label")
+        vbox.pack_start(lbl_path, False, False, 0)
+        hbox.pack_start(vbox, True, True, 0)
+
+        # Per-row remove button
+        btn_remove = Gtk.Button()
+        btn_remove.set_image(Gtk.Image.new_from_icon_name("edit-delete-symbolic", Gtk.IconSize.BUTTON))
+        btn_remove.set_tooltip_text(f"Remove '{name}'")
+        btn_remove.get_style_context().add_class("flat")
+        btn_remove.set_valign(Gtk.Align.CENTER)
+        btn_remove.connect("clicked", self.on_remove_row_clicked, row, name)
+        hbox.pack_end(btn_remove, False, False, 0)
+
+        row.add(hbox)
+        row.show_all()
+        self.listbox.add(row)
 
     def on_add_clicked(self, widget):
         dialog = Gtk.FileChooserDialog(
@@ -992,39 +1084,39 @@ class ManageFoldersDialog(Gtk.Dialog):
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OPEN, Gtk.ResponseType.OK,
         )
-        
+
         if dialog.run() == Gtk.ResponseType.OK:
             path = dialog.get_filename()
             dialog.destroy()
-            
+
             # Ask for a name
             name_dialog = Gtk.Dialog(title="Category Name", parent=self, flags=0)
             name_dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK, Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
             content = name_dialog.get_content_area()
+            content.set_spacing(10)
+            content.set_margin_top(10)
+            content.set_margin_start(10)
+            content.set_margin_end(10)
             entry = Gtk.Entry()
             entry.set_placeholder_text("e.g., Nature, Cars")
-            content.pack_start(Gtk.Label(label="Enter a name for this folder check:"), False, False, 10)
-            content.pack_start(entry, False, False, 10)
+            content.pack_start(Gtk.Label(label="Enter a name for this folder:"), False, False, 0)
+            content.pack_start(entry, False, False, 0)
             name_dialog.show_all()
-            
+
             if name_dialog.run() == Gtk.ResponseType.OK:
                 name = entry.get_text().strip()
                 if name and name not in self.categories:
-                    self.store.append([name, path])
                     self.categories[name] = path
-                    self.parent_window.save_folder_categories() # Auto-save
+                    self._add_row(name, path)
+                    self.parent_window.save_folder_categories()
                 elif name in self.categories:
-                    show_error_dialog("Category name already exists detected.", parent=self)
+                    show_error_dialog("A folder with that name already exists.", parent=self)
             name_dialog.destroy()
         else:
             dialog.destroy()
 
-    def on_remove_clicked(self, widget):
-        selection = self.tree.get_selection()
-        model, iter = selection.get_selected()
-        if iter:
-            name = model[iter][0]
+    def on_remove_row_clicked(self, button, row, name):
+        if name in self.categories:
             del self.categories[name]
-            model.remove(iter)
-            self.parent_window.save_folder_categories() # Auto-save
-            GLib.idle_add(show_error_dialog, f"Error configuring systemd services: {e}", self)
+        self.listbox.remove(row)
+        self.parent_window.save_folder_categories()

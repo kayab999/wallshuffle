@@ -11,21 +11,10 @@ from PIL import Image
 
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib
-
+from .constants import GNOME_COMPAT
 
 class WallpaperManager:
     # Desktop environment categories
-    GNOME_COMPAT = [
-        "gnome",
-        "unity",
-        "ubuntu",
-        "cinnamon",
-        "budgie",
-        "mate",
-        "pantheon",
-        "pop",
-    ]
-
     # Mappings for scaling modes per DE
     # GNOME modes: 'none', 'wallpaper', 'centered', 'scaled', 'stretched', 'zoom', 'spanned'
     # KDE FillMode: 0:Stretch, 1:Fit, 2:Zoom, 3:Tile, 4:Spanned, 5:Centered
@@ -98,7 +87,7 @@ class WallpaperManager:
 
         # 1. Check XDG_CURRENT_DESKTOP
         if xdg_current_desktop:
-            for variant in self.GNOME_COMPAT:
+            for variant in GNOME_COMPAT:
                 if variant in xdg_current_desktop:
                     return variant
             if "kde" in xdg_current_desktop:
@@ -108,7 +97,7 @@ class WallpaperManager:
 
         # 2. Check DESKTOP_SESSION
         if desktop_session:
-            for variant in self.GNOME_COMPAT:
+            for variant in GNOME_COMPAT:
                 if variant in desktop_session:
                     return variant
             if "kde" in desktop_session:
@@ -184,10 +173,39 @@ class WallpaperManager:
 
         GLib.idle_add(callback)
         if not event.wait(timeout=2.0):
-            self.logger.warning("Timeout waiting for monitor info from main thread. Returning default/empty.")
-            return []
+            self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to xrandr.")
+            return self._get_monitor_info_xrandr()
 
         return result_container["info"]
+
+    def _get_monitor_info_xrandr(self):
+        """Fallback monitor detection via xrandr (works without GLib MainLoop)."""
+        monitor_info = []
+        if not shutil.which("xrandr"):
+            self.logger.warning("xrandr not found, cannot detect monitors in headless mode.")
+            return monitor_info
+
+        try:
+            import re
+            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                pattern = re.compile(r" connected (?:primary )?(\d+)x(\d+)\+(\d+)\+(\d+)")
+                for idx, line in enumerate(result.stdout.splitlines()):
+                    match = pattern.search(line)
+                    if match:
+                        w, h, x, y = map(int, match.groups())
+                        monitor_info.append({
+                            "name": f"Monitor-{idx}",
+                            "width": w, "height": h,
+                            "x": x, "y": y,
+                        })
+                self.logger.debug(f"xrandr fallback detected monitors: {monitor_info}")
+            else:
+                self.logger.error(f"xrandr query failed with code {result.returncode}")
+        except Exception as e:
+            self.logger.error(f"xrandr fallback failed: {e}")
+
+        return monitor_info
 
     def _get_monitor_info_main(self):
         """Internal method to get monitor info using Gdk (Must run on Main Thread)."""
@@ -280,10 +298,10 @@ class WallpaperManager:
                     with Image.open(img_path) as img:
                         target_w = monitor["width"]
                         target_h = monitor["height"]
-                        
+
                         img_ratio = img.width / img.height
                         target_ratio = target_w / target_h
-                        
+
                         # Apply scaling based on mode
                         if mode == "zoom":
                             # Zoom/Cover: Resize to fill, crop excess
@@ -300,7 +318,7 @@ class WallpaperManager:
                                 resized = img.resize((new_width, new_height), Image.LANCZOS)
                                 top = (new_height - target_h) // 2
                                 final_img = resized.crop((0, top, target_w, top + target_h))
-                        
+
                         elif mode == "scaled":
                             # Scaled/Fit: Resize to fit inside, black bars
                             if img_ratio > target_ratio:
@@ -311,9 +329,9 @@ class WallpaperManager:
                                 # Taller than screen: Fit Height
                                 new_height = target_h
                                 new_width = int(new_height * img_ratio)
-                            
+
                             resized = img.resize((new_width, new_height), Image.LANCZOS)
-                            
+
                             # Create black background for this monitor patch
                             bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
                             # Center the resized image
@@ -334,7 +352,7 @@ class WallpaperManager:
                             offset_x = (target_w - img.width) // 2
                             offset_y = (target_h - img.height) // 2
                             bg.paste(img, (offset_x, offset_y))
-                            final_img = bg # If image is larger, paste creates crop effect naturally? 
+                            final_img = bg # If image is larger, paste creates crop effect naturally?
                             # PIL paste handles larger images by cropping them, but only if we paste onto a canvas
                             # However, if offset is negative (image larger), we need to crop the image first
                             if offset_x < 0 or offset_y < 0:
@@ -344,17 +362,17 @@ class WallpaperManager:
                                 # Actually `paste` does not crop automatically in a way that centers.
                                 # It just pastes top-left at the given coordinate.
                                 # If coordinate is negative, it pastes off-canvas.
-                                pass 
+                                pass
                             # Re-doing Center logic to be robust:
                             bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
-                            
+
                             # Caclulate crop from source image if it's larger than target
                             if img.width > target_w:
                                 left = (img.width - target_w) // 2
                                 img_crop_w = img.crop((left, 0, left + target_w, img.height))
                             else:
                                 img_crop_w = img
-                            
+
                             if img_crop_w.height > target_h:
                                 top = (img_crop_w.height - target_h) // 2
                                 final_img_content = img_crop_w.crop((0, top, img_crop_w.width, top + target_h))
@@ -432,7 +450,7 @@ class WallpaperManager:
         if not image_paths:
             return False
 
-        if self.desktop_environment in self.GNOME_COMPAT:
+        if self.desktop_environment in GNOME_COMPAT:
             return self.apply_gnome_settings(mode, image_paths, background_color)
         elif self.desktop_environment == "kde":
             return self.apply_kde_settings(mode, image_paths, background_color)

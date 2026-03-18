@@ -3,7 +3,8 @@ import os
 
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
-from .utils import CONFIG_DIR, show_error_dialog
+from .utils import CONFIG_DIR
+from .gui_helpers import show_error_dialog
 
 
 def apply_image_effect(image_path, effect_type):
@@ -29,6 +30,7 @@ def apply_image_effect(image_path, effect_type):
         os.makedirs(temp_dir, exist_ok=True)
         processed_image_path = os.path.join(temp_dir, f"processed_wallpaper_{effect_type.lower()}.jpg")
         img.save(processed_image_path)
+        img.close()
         return processed_image_path
     except FileNotFoundError:
         logging.error(f"Image file not found for applying effect: {image_path}")

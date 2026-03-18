@@ -27,6 +27,41 @@ THEMES = {
         "hover": "#A3E046",  # lighter green
         "button_text": "#333333",
     },
+    "Nord": {
+        "background": "#2E3440",
+        "foreground": "#D8DEE9",
+        "accent": "#88C0D0",
+        "hover": "#81A1C1",
+        "button_text": "#2E3440",
+    },
+    "Dracula": {
+        "background": "#282A36",
+        "foreground": "#F8F8F2",
+        "accent": "#BD93F9",
+        "hover": "#CAA9FA",
+        "button_text": "#282A36",
+    },
+    "Solarized Dark": {
+        "background": "#002B36",
+        "foreground": "#839496",
+        "accent": "#268BD2",
+        "hover": "#2AA198",
+        "button_text": "#002B36",
+    },
+    "Solarized Light": {
+        "background": "#FDF6E3",
+        "foreground": "#657B83",
+        "accent": "#859900",
+        "hover": "#B58900",
+        "button_text": "#FFFFFF",
+    },
+    "Custom": {
+        "background": "#F5F5F5",
+        "foreground": "#333333",
+        "accent": "#007ACC",
+        "hover": "#3399FF",
+        "button_text": "#FFFFFF",
+    },
     "Default": {
         "background": "#F5F5F5",
         "foreground": "#333333",

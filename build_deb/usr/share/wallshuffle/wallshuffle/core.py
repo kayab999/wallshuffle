@@ -3,7 +3,7 @@ import os
 import random
 from enum import Enum, auto
 
-from .config_manager import ConfigManager
+from .config_manager import get_config_manager
 from .constants import SUPPORTED_EXTENSIONS
 from .effects import apply_image_effect
 from .online_sources import OnlineSourceManager
@@ -22,9 +22,29 @@ class WallpaperUpdateResult(Enum):
     FILE_SYSTEM_ERROR = auto()
 
 
-def change_wallpaper():
+def change_wallpaper() -> WallpaperUpdateResult:
+    """
+    Change the desktop wallpaper based on current configuration.
+
+    This function serves as the main entry point for wallpaper changes, called
+    from both the GUI and the systemd timer (wallshuffle --change).
+
+    Returns:
+        WallpaperUpdateResult: Enum indicating the outcome:
+            - SUCCESS: Wallpaper changed successfully
+            - NO_SOURCE_CONFIGURED: No valid source (folder/API) configured
+            - NO_IMAGES_FOUND: Source configured but no images available
+            - NETWORK_ERROR: Network failure when fetching online sources
+            - UNSUPPORTED_DESKTOP: Desktop environment not supported
+            - COMMAND_FAILED: Desktop settings command failed
+            - CONFIGURATION_ERROR: Config file corrupted or missing
+            - FILE_SYSTEM_ERROR: Cannot access local folder/files
+
+    Thread-Safety:
+        Uses singleton ConfigManager to ensure consistent state across calls.
+    """
     logging.info("--- Running change_wallpaper ---")
-    config_manager = ConfigManager()
+    config_manager = get_config_manager()
     config = config_manager.load_settings()
 
     if "Settings" not in config:
@@ -86,8 +106,10 @@ def change_wallpaper():
 
                 found_images = []
                 if recursive_search:
-                    # Recursive search with safe symlink following
+                    # Recursive search with safe symlink following and bounded depth
                     visited_dirs = set()
+                    MAX_DEPTH = 50
+
                     for root, dirs, files in os.walk(folder, followlinks=True):
                         # Detect loops
                         try:
@@ -97,6 +119,17 @@ def change_wallpaper():
                                 logging.warning(f"Symlink loop detected or already visited: {root} -> {real_root}. Skipping.")
                                 dirs[:] = [] # Don't recurse further
                                 continue
+
+                            # Bounded depth check (prevent infinite recursion attacks)
+                            # Calculate depth relative to the start folder
+                            start_depth = folder.rstrip(os.sep).count(os.sep)
+                            current_depth = root.rstrip(os.sep).count(os.sep)
+                            if (current_depth - start_depth) > MAX_DEPTH:
+                                logging.warning(f"Maximum directory traversal depth ({MAX_DEPTH}) exceeded at {root}. a dir.")
+                                dirs[:] = []
+                                # continue instead of break to allow siblings, but walk modifies dirs in-place to stop recursion down this path
+                                continue
+
                             visited_dirs.add(real_root)
                         except OSError as e:
                              logging.warning(f"Error resolving path {root}: {e}. Skipping loop check.")

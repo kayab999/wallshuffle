@@ -10,8 +10,9 @@ import time
 
 import gi
 
-from .config_manager import ConfigManager
+from .config_manager import get_config_manager
 from .core import WallpaperUpdateResult, change_wallpaper
+from .online_sources import OnlineSourceManager
 from .theme_manager import ThemeManager
 from .ui import WallpaperAppWindow
 from .utils import CONFIG_DIR, check_systemd_available, show_error_dialog
@@ -28,7 +29,7 @@ from gi.repository import Gio, GLib, Gtk
 
 
 class WallpaperApp(Gtk.Application):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: any, **kwargs: any) -> None:
         super().__init__(
             *args,
             application_id="com.wallshuffle.app",
@@ -50,9 +51,14 @@ class WallpaperApp(Gtk.Application):
         signal.signal(signal.SIGHUP, self._signal_handler)
 
         self.logger.debug("Initializing ThemeManager in WallpaperApp.__init__")
-        self.config_manager = ConfigManager()
+        self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
+
+        # Schedule cache cleanup
+        threading.Thread(target=OnlineSourceManager.cleanup_old_cache, daemon=True).start()
+
+        # Perform environment checks immediately in __init__
 
         # Perform environment checks immediately in __init__
         # This prevents race conditions where the window is created (using defaults)
@@ -79,7 +85,7 @@ class WallpaperApp(Gtk.Application):
         self.theme_manager = ThemeManager(self.config_manager, self.config)
         self.logger.debug("ThemeManager initialized")
 
-    def _clean_temp_dir(self):
+    def _clean_temp_dir(self) -> None:
         """Cleans up temporary files from previous sessions."""
         try:
             temp_dir = os.path.join(CONFIG_DIR, "temp")
@@ -90,7 +96,7 @@ class WallpaperApp(Gtk.Application):
         except Exception as e:
             self.logger.warning(f"Failed to clean temp directory: {e}")
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum: int, frame: any) -> None:
         """Handle termination signals gracefully."""
         # Use low-level write to avoid re-entrant logging issues in signal handlers
         msg = f"Received signal {signum}, cleaning up...\n"
@@ -347,13 +353,13 @@ class WallpaperApp(Gtk.Application):
         menu.show_all()
         return menu
 
-    def _send_notification(self, title, body):
+    def _send_notification(self, title: str, body: str) -> None:
         notification = Gio.Notification.new(title)
         notification.set_body(body)
         notification.set_default_action("app.activate")
         self.send_notification("wallshuffle-notification", notification)
 
-    def _handle_change_result(self, result):
+    def _handle_change_result(self, result: WallpaperUpdateResult) -> None:
         """Handles the result from change_wallpaper on the main GTK thread."""
         if result == WallpaperUpdateResult.SUCCESS:
             if self.win:
@@ -407,13 +413,23 @@ class WallpaperApp(Gtk.Application):
         def toggle_timer_thread():
             """Background thread function to toggle the timer."""
             command_success = False
+
+            # Proactively reload to ensure systemd sees our .timer file
+            self.wallpaper_manager._run_subprocess(["systemctl", "--user", "daemon-reload"], "daemon-reload", timeout=5)
+
             if current_paused_state:  # App is currently paused, so try to resume (start timer)
                 self.logger.info("Attempting to resume wallpaper timer.")
                 command_success = self.wallpaper_manager._run_subprocess(
-                    ["systemctl", "--user", "start", "wallpaper-changer.timer"],
-                    "start timer",
+                    ["systemctl", "--user", "enable", "wallpaper-changer.timer"],
+                    "enable timer",
                     timeout=5,
                 )
+                if command_success:
+                    command_success = self.wallpaper_manager._run_subprocess(
+                        ["systemctl", "--user", "start", "wallpaper-changer.timer"],
+                        "start timer",
+                        timeout=5,
+                    )
             else:  # App is currently running, so try to pause (stop timer)
                 self.logger.info("Attempting to pause wallpaper timer.")
                 command_success = self.wallpaper_manager._run_subprocess(
@@ -421,6 +437,12 @@ class WallpaperApp(Gtk.Application):
                     "stop timer",
                     timeout=5,
                 )
+                if command_success:
+                    self.wallpaper_manager._run_subprocess(
+                        ["systemctl", "--user", "disable", "wallpaper-changer.timer"],
+                        "disable timer",
+                        timeout=5,
+                    )
 
             # Update UI on main thread
             GLib.idle_add(self._handle_timer_toggle_result, command_success, current_paused_state)

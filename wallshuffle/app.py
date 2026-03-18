@@ -11,13 +11,14 @@ import time
 import gi
 
 from .config_manager import get_config_manager
-from .config_manager import get_config_manager
 from .core import WallpaperUpdateResult, change_wallpaper
 from .online_sources import OnlineSourceManager
 from .theme_manager import ThemeManager
 from .ui import WallpaperAppWindow
-from .utils import CONFIG_DIR, check_systemd_available, show_error_dialog
+from .utils import CONFIG_DIR, check_systemd_available
+from .gui_helpers import show_error_dialog
 from .wallpaper_manager import WallpaperManager
+from .constants import GNOME_COMPAT
 
 gi.require_version("Gtk", "3.0")
 try:
@@ -55,11 +56,9 @@ class WallpaperApp(Gtk.Application):
         self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
-        
+
         # Schedule cache cleanup
         threading.Thread(target=OnlineSourceManager.cleanup_old_cache, daemon=True).start()
-
-        # Perform environment checks immediately in __init__
 
         # Perform environment checks immediately in __init__
         # This prevents race conditions where the window is created (using defaults)
@@ -69,9 +68,7 @@ class WallpaperApp(Gtk.Application):
         current_de = self.wallpaper_manager.get_desktop_environment()
 
         # GNOME-compatible environments list (must match wallpaper_manager.py)
-        gnome_compat = ["gnome", "unity", "ubuntu", "cinnamon", "budgie", "mate", "pantheon", "pop"]
-
-        if current_de in gnome_compat or current_de in ["kde", "xfce"]:
+        if current_de in GNOME_COMPAT or current_de in ["kde", "xfce"]:
             self.is_de_supported = True
             self.logger.info(f"Desktop Environment: {current_de} (Supported)")
         else:
@@ -304,8 +301,15 @@ class WallpaperApp(Gtk.Application):
                 self.logger.debug(f"Searched: {', '.join(search_paths)}")
 
         try:
-            self.status_icon = AppIndicator3.Indicator.new(indicator_id, "wallshuffle", AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
-            self.logger.debug("AppIndicator3.Indicator.new called successfully.")
+            init_icon = "image-x-generic"
+            if icon_path and os.path.exists(icon_path):
+                init_icon = os.path.splitext(os.path.basename(icon_path))[0]
+            
+            self.status_icon = AppIndicator3.Indicator.new(indicator_id, init_icon, AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
+            self.logger.debug(f"AppIndicator3.Indicator.new called successfully with icon '{init_icon}'.")
+
+            if icon_path and os.path.exists(icon_path):
+                self.status_icon.set_icon_theme_path(os.path.dirname(icon_path))
 
             # Create and set menu BEFORE activating
             self.indicator_menu = self._create_indicator_menu()
@@ -338,17 +342,20 @@ class WallpaperApp(Gtk.Application):
         self.menu_item_next = Gtk.MenuItem(label="Next Wallpaper")
         self.menu_item_pause = Gtk.MenuItem(label="Pause/Resume")
         menu_item_open = Gtk.MenuItem(label="Open WallShuffle")
+        menu_item_about = Gtk.MenuItem(label="About")
         menu_item_quit = Gtk.MenuItem(label="Quit")
 
         self.menu_item_next.connect("activate", self.on_next_wallpaper_clicked)
         self.menu_item_pause.connect("activate", self.on_pause_resume_clicked)
         menu_item_open.connect("activate", self.on_open_wallshuffle_clicked)
+        menu_item_about.connect("activate", self.on_about_clicked)
         menu_item_quit.connect("activate", self.on_quit_clicked)
 
         menu.append(self.menu_item_next)
         menu.append(self.menu_item_pause)
         menu.append(Gtk.SeparatorMenuItem())
         menu.append(menu_item_open)
+        menu.append(menu_item_about)
         menu.append(menu_item_quit)
 
         menu.show_all()
@@ -414,10 +421,10 @@ class WallpaperApp(Gtk.Application):
         def toggle_timer_thread():
             """Background thread function to toggle the timer."""
             command_success = False
-            
+
             # Proactively reload to ensure systemd sees our .timer file
             self.wallpaper_manager._run_subprocess(["systemctl", "--user", "daemon-reload"], "daemon-reload", timeout=5)
-            
+
             if current_paused_state:  # App is currently paused, so try to resume (start timer)
                 self.logger.info("Attempting to resume wallpaper timer.")
                 command_success = self.wallpaper_manager._run_subprocess(

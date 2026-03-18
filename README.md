@@ -24,6 +24,7 @@ pip install -e . --user
 
 - **Multiple Sources:** Use images from a local folder or fetch them from Unsplash using keywords.
 - **Custom Intervals:** Set wallpapers to change automatically at any minute-based interval.
+- **Display Ordering:** Choose between random or sequential (alphabetical) wallpaper display.
 - **Image Effects:** Apply simple effects like Grayscale, Blur, or Sepia to your wallpapers.
 - **Multi-Monitor Support:** Includes basic support for spanning a single image across multiple monitors.
 - **Theming:** Customize the application's appearance with built-in themes (e.g., Ubuntu).
@@ -79,7 +80,7 @@ cd wallshuffle
 - **Systemd Dependency:** Wallshuffle uses `systemd` timers for scheduling. This will not work on non-systemd distros (e.g., Devuan, Artix).
 - **libfuse2:** AppImages require `libfuse2`. If the app won't start, run: `sudo apt install libfuse2`.
 
-## Usage
+## Configuration Options
 
 When you launch the application, you will be presented with the following options:
 
@@ -89,6 +90,7 @@ When you launch the application, you will be presented with the following option
 - **Display Mode:** Control how the image is displayed (e.g., Zoom, Scaled, Centered).
 - **Change Interval:** Set the number of minutes between automatic wallpaper changes. Set to 0 to disable automatic changes.
 - **Change wallpaper on startup:** Check this to have the wallpaper change shortly after you log in.
+- **Random Order:** Toggle whether to display wallpapers in a random or sequential order.
 - **Image Effect:** Apply an optional visual effect to the wallpapers.
 - **Multi-Monitor Mode:** Choose how the wallpaper should be handled on multi-monitor setups.
 
@@ -134,46 +136,17 @@ If you prefer to build the AppImage yourself:
     ```
     The final AppImage will be located in the project's root directory.
 
-## Troubleshooting
+## 🛡️ Sovereignty & Limitations
 
-- **Systemd Dependency:** Wallshuffle uses `systemd` timers for scheduling wallpaper changes. This is standard on most modern Linux distributions (Ubuntu, Fedora, Arch, etc.). If you are using a distribution without `systemd` (like Devuan or Artix), the automatic scheduling feature will not work.
-- **Wayland vs. X11:** Wallpaper setting mechanisms can differ between Wayland and X11 sessions. Wallshuffle uses standard command-line tools (`gsettings`, `dbus-send`, `xfconf-query`) that work reliably on major desktop environments (GNOME, KDE, XFCE) under both X11 and Wayland. However, if you are using a more niche window manager, you may encounter issues.
-- **AppIndicator/Tray Icon:** The system tray icon relies on `AppIndicator` or `AyatanaAppIndicator`. If you are using a minimal desktop environment that does not have a tray that supports this standard, the icon may not appear. The application will still run in the background.
+- **Privacy First:** WallShuffle does not collect metrics, telemetry, or crash reports. It is 100% local-first.
+- **Wayland Note:** On Wayland sessions, the app forces the X11 backend to ensure GTK3 stability and correct window positioning.
+- **Dependencies:** If using the `.deb` package, ensure you have `gir1.2-gtk-3.0` and `python3-pil` installed.
 
-## Configuration
+## ☕ Support Development
 
-Configuration is stored in `~/.config/wallshuffle/config.ini`. You can edit this file manually or use the settings dialog in the application.
-
-## Development
-
-This project uses a `Makefile` to standardize development tasks.
-
-### Prerequisites
-- Python 3.10+
-- `libgirepository1.0-dev` (for PyGObject)
-
-### Setup
-Initialize the virtual environment and install dependencies:
-```bash
-make setup
-```
-
-### Testing & Quality
-Run the test suite:
-```bash
-make test
-```
-
-Check code style and types (Ruff & Mypy):
-```bash
-make lint
-```
-
-### Build
-Create the AppImage:
-```bash
-make build
-```
+If WallShuffle makes your desktop better, consider supporting the developer:
+- **Ko-fi:** `https://ko-fi.com/nysekf`
+- **GitHub Sponsors:** Look for the "Sponsor" button on my profile.
 
 ## Uninstall
 
@@ -188,3 +161,7 @@ This script will safely remove the AppImage, wrapper, desktop entries, icons, an
 Options:
 - `./uninstall.sh --purge`: Also removes configuration files and logs.
 - `./uninstall.sh --help`: Show usage information.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

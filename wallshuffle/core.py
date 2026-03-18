@@ -44,6 +44,13 @@ def change_wallpaper() -> WallpaperUpdateResult:
         Uses singleton ConfigManager to ensure consistent state across calls.
     """
     logging.info("--- Running change_wallpaper ---")
+    
+    # Log execution context
+    display = os.environ.get("DISPLAY", "NOT SET")
+    wayland = os.environ.get("WAYLAND_DISPLAY", "NOT SET")
+    is_headless = display == "NOT SET" and wayland == "NOT SET"
+    context_type = "Headless/Timer Context" if is_headless else "GUI/Interactive Context"
+    logging.info(f"Execution Context: {context_type} | DISPLAY='{display}' | WAYLAND_DISPLAY='{wayland}'")
     config_manager = get_config_manager()
     config = config_manager.load_settings()
 
@@ -52,7 +59,12 @@ def change_wallpaper() -> WallpaperUpdateResult:
         return WallpaperUpdateResult.CONFIGURATION_ERROR
 
     settings = config["Settings"]
-    logging.info(f"Settings loaded: {dict(settings)}")
+    # Redact sensitive fields before logging
+    safe_settings = dict(settings)
+    if "unsplash_api_key" in safe_settings:
+        key = safe_settings["unsplash_api_key"]
+        safe_settings["unsplash_api_key"] = key[:4] + "****" if len(key) > 4 else "****"
+    logging.info(f"Settings loaded: {safe_settings}")
 
     manager = WallpaperManager()
 
@@ -109,7 +121,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
                     # Recursive search with safe symlink following and bounded depth
                     visited_dirs = set()
                     MAX_DEPTH = 50
-                    
+
                     for root, dirs, files in os.walk(folder, followlinks=True):
                         # Detect loops
                         try:
@@ -119,17 +131,17 @@ def change_wallpaper() -> WallpaperUpdateResult:
                                 logging.warning(f"Symlink loop detected or already visited: {root} -> {real_root}. Skipping.")
                                 dirs[:] = [] # Don't recurse further
                                 continue
-                            
+
                             # Bounded depth check (prevent infinite recursion attacks)
                             # Calculate depth relative to the start folder
                             start_depth = folder.rstrip(os.sep).count(os.sep)
                             current_depth = root.rstrip(os.sep).count(os.sep)
                             if (current_depth - start_depth) > MAX_DEPTH:
-                                logging.warning(f"Maximum directory traversal depth ({MAX_DEPTH}) exceeded at {root}. a dir.")
+                                logging.warning(f"Maximum directory traversal depth ({MAX_DEPTH}) exceeded at {root}.")
                                 dirs[:] = []
                                 # continue instead of break to allow siblings, but walk modifies dirs in-place to stop recursion down this path
                                 continue
-                                
+
                             visited_dirs.add(real_root)
                         except OSError as e:
                              logging.warning(f"Error resolving path {root}: {e}. Skipping loop check.")
@@ -141,13 +153,23 @@ def change_wallpaper() -> WallpaperUpdateResult:
                     found_images = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(tuple(SUPPORTED_EXTENSIONS))]
 
                 if found_images:
+                    random_order = config_manager.get_setting(config, "Settings", "random_order", True, value_type=bool)
+                    if not random_order:
+                        found_images.sort()
+
                     # Select N unique images if possible
                     if len(found_images) >= images_needed:
-                        image_paths = random.sample(found_images, images_needed)
+                        if random_order:
+                            image_paths = random.sample(found_images, images_needed)
+                        else:
+                            # State for sequential isn't purely persisted. 
+                            # Since we don't track the last shown index globally, default to first N images.
+                            image_paths = found_images[:images_needed]
                     else:
                         # Not enough images, fill with what we have (randomly sampling with replacement to fill gaps)
-                        # But simpler: just shuffle and cycle
-                        random.shuffle(found_images)
+                        # But simpler: just shuffle and cycle, or cycle in order
+                        if random_order:
+                            random.shuffle(found_images)
                         image_paths = [found_images[i % len(found_images)] for i in range(images_needed)]
 
                     logging.info(f"Selected images: {image_paths}")
@@ -186,6 +208,37 @@ def change_wallpaper() -> WallpaperUpdateResult:
         except Exception as e:
             logging.error(f"Network error fetching from Unsplash: {e}")
             return WallpaperUpdateResult.NETWORK_ERROR
+
+    elif source == "URL / Hyperlink":
+        hyperlink_url = config_manager.get_setting(config, "Settings", "hyperlink_url", "")
+        if not hyperlink_url or not hyperlink_url.startswith("http"):
+            logging.error("URL / Hyperlink source selected but no valid URL provided.")
+            return WallpaperUpdateResult.NO_SOURCE_CONFIGURED
+
+        logging.info(f"Source: URL, Fetching from: {hyperlink_url}")
+        try:
+            import requests
+            import tempfile
+            from .utils import CONFIG_DIR
+
+            response = requests.get(hyperlink_url, stream=True, timeout=15)
+            response.raise_for_status()
+
+            temp_dir = os.path.join(CONFIG_DIR, "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir) as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                image_path = f.name
+            
+            image_paths = [image_path] * images_needed
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error fetching from URL {hyperlink_url}: {e}")
+            return WallpaperUpdateResult.NETWORK_ERROR
+        except Exception as e:
+             logging.error(f"Error saving image from URL: {e}")
+             return WallpaperUpdateResult.FILE_SYSTEM_ERROR
 
     if not image_paths:
         logging.warning("No image paths resolved. Exiting change_wallpaper.")
@@ -250,6 +303,25 @@ def change_wallpaper() -> WallpaperUpdateResult:
     logging.info(f"Applying wallpaper with mode: {mode}, images: {len(final_image_paths)}")
 
     if manager.apply_desktop_settings(mode, final_image_paths, background_color):
+        
+        # Proactive Safe Temp File Cleanup
+        try:
+            from .utils import CONFIG_DIR
+            temp_dir = os.path.join(CONFIG_DIR, "temp")
+            if os.path.exists(temp_dir):
+                kept_files = set(os.path.abspath(p) for p in final_image_paths if p)
+                cleaned_count = 0
+                for filename in os.listdir(temp_dir):
+                    file_path = os.path.abspath(os.path.join(temp_dir, filename))
+                    if file_path not in kept_files:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                            cleaned_count += 1
+                if cleaned_count > 0:
+                    logging.info(f"Cleaned up {cleaned_count} old temporary file(s).")
+        except Exception as e:
+            logging.error(f"Failed to clean up old temp files safely: {e}")
+
         logging.info("--- change_wallpaper finished successfully ---")
         return WallpaperUpdateResult.SUCCESS
     else:

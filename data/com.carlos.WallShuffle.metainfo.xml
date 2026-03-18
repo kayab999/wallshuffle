@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.carlos.WallShuffle</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>WallShuffle</name>
+  <summary>A professional wallpaper manager for Linux desktops</summary>
+  <description>
+    <p>
+      WallShuffle is a premium, privacy-first wallpaper manager designed for GNOME, KDE, and XFCE.
+      It features high-quality Unsplash integration, local image effects (Blur, Sepia, Grayscale),
+      and robust multi-monitor support (span, repeat, or unique images per screen).
+    </p>
+    <ul>
+      <li>Privacy-first: Local processing and redacted logs</li>
+      <li>Lightweight: Minimal resource usage with systemd timers</li>
+      <li>Highly compatible: Supports major Linux Desktop Environments</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.carlos.WallShuffle.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The main interface of WallShuffle</caption>
+      <image>https://raw.githubusercontent.com/carlos/wallshuffle/main/assets/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://carlos.github.io/wallshuffle/</url>
+  <provides>
+    <binary>wallshuffle</binary>
+  </provides>
+</component>

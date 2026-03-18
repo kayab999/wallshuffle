@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WallShuffle — Professional Wallpaper Manager for Linux</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #38bdf8;
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            max-width: 800px;
+            margin-bottom: 60px;
+        }
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 700;
+            margin: 0;
+            background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .tagline {
+            font-size: 1.25rem;
+            color: var(--text-dim);
+            margin-top: 10px;
+        }
+
+        .main-card {
+            background-color: var(--card-bg);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            max-width: 700px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .cta-group {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: var(--bg);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(56, 189, 248, 0.4);
+        }
+
+        .btn-secondary {
+            background-color: rgba(255,255,255,0.05);
+            color: var(--text);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .btn-secondary:hover {
+            background-color: rgba(255,255,255,0.1);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 30px;
+            margin-top: 60px;
+            max-width: 900px;
+            width: 100%;
+        }
+
+        .feature-item {
+            text-align: center;
+        }
+
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .feature-title {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .feature-desc {
+            font-size: 0.9rem;
+            color: var(--text-dim);
+        }
+
+        footer {
+            margin-top: 80px;
+            font-size: 0.875rem;
+            color: var(--text-dim);
+            text-align: center;
+        }
+
+        .badge {
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--accent);
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 20px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="badge">Privacy-First Linux Software</div>
+        <h1>WallShuffle</h1>
+        <p class="tagline">The premium wallpaper engine for GNOME, KDE, and XFCE.</p>
+    </header>
+
+    <div class="main-card">
+        <h3>Release v1.1.0 Ready</h3>
+        <p>Experience local image effects, multi-monitor spanning, and high-res Unsplash automation in one lightweight, systemd-powered app.</p>
+        
+        <div class="cta-group">
+            <a href="https://github.com/carlos/wallshuffle/releases/latest" class="btn btn-primary">
+                Download AppImage
+            </a>
+            <a href="https://buymeacoffee.com/wallshuffle" class="btn btn-secondary">
+                Support Development ☕
+            </a>
+        </div>
+    </div>
+
+    <div class="features">
+        <div class="feature-item">
+            <span class="feature-icon">🛡️</span>
+            <span class="feature-title">Privacy First</span>
+            <p class="feature-desc">All processing is local. No telemetry. Redacted logs.</p>
+        </div>
+        <div class="feature-item">
+            <span class="feature-icon">⚡</span>
+            <span class="feature-title">Systemd Native</span>
+            <p class="feature-desc">Efficient automation via standard Linux user timers.</p>
+        </div>
+        <div class="feature-item">
+            <span class="feature-icon">🖥️</span>
+            <span class="feature-title">Multi-Monitor</span>
+            <p class="feature-desc">Span, repeat, or shuffle different images per screen.</p>
+        </div>
+    </div>
+
+    <footer>
+        <p>&copy; 2026 WallShuffle Project. Licensed under MIT.</p>
+    </footer>
+</body>
+</html>
