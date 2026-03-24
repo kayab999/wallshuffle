@@ -3,8 +3,8 @@ import os
 
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
-from .utils import CONFIG_DIR
 from .gui_helpers import show_error_dialog
+from .utils import CONFIG_DIR
 
 
 def apply_image_effect(image_path, effect_type):

@@ -11,22 +11,36 @@ import time
 import gi
 
 from .config_manager import get_config_manager
+from .constants import GNOME_COMPAT
 from .core import WallpaperUpdateResult, change_wallpaper
+from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
 from .theme_manager import ThemeManager
 from .ui import WallpaperAppWindow
 from .utils import CONFIG_DIR, check_systemd_available
-from .gui_helpers import show_error_dialog
 from .wallpaper_manager import WallpaperManager
-from .constants import GNOME_COMPAT
 
 gi.require_version("Gtk", "3.0")
+
+# Flag to track if tray icon support is available
+TRAY_SUPPORTED = False
+AppIndicator3 = None
+
 try:
-    gi.require_version("AyatanaAppIndicator3", "0.1")
-    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
-except (ValueError, ImportError):
-    gi.require_version("AppIndicator3", "0.1")
-    from gi.repository import AppIndicator3
+    try:
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+        TRAY_SUPPORTED = True
+    except (ValueError, ImportError):
+        try:
+            gi.require_version("AppIndicator3", "0.1")
+            from gi.repository import AppIndicator3
+            TRAY_SUPPORTED = True
+        except (ValueError, ImportError):
+            logging.warning("Neither AyatanaAppIndicator3 nor AppIndicator3 found. Tray icon will be disabled.")
+except Exception as e:
+    logging.error(f"Unexpected error while checking for tray support: {e}")
+
 from gi.repository import Gio, GLib, Gtk
 
 
@@ -41,6 +55,7 @@ class WallpaperApp(Gtk.Application):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.win = None
         self.status_icon = None
+        self.tray_available = False # Will be set to True on success
         self.paused = False
         self.css_provider = None
         self.server_socket = None
@@ -82,6 +97,14 @@ class WallpaperApp(Gtk.Application):
 
         self.theme_manager = ThemeManager(self.config_manager, self.config)
         self.logger.debug("ThemeManager initialized")
+
+        # Sync local state with systemd timer
+        if self.is_systemd_available:
+            is_active = self.wallpaper_manager.check_timer_active()
+            self.paused = not is_active
+            self.logger.info(f"Systemd timer active: {is_active}. Setting paused state to: {self.paused}")
+        else:
+            self.paused = True
 
     def _clean_temp_dir(self) -> None:
         """Cleans up temporary files from previous sessions."""
@@ -182,8 +205,15 @@ class WallpaperApp(Gtk.Application):
         # Clean up temp files from previous runs
         self.wallpaper_manager.cleanup_temp_files()
 
-        self.css_provider = self.theme_manager.get_css_provider()
-        self.create_status_icon()
+        try:
+            self.css_provider = self.theme_manager.get_css_provider()
+        except Exception as e:
+            self.logger.error(f"Failed to load CSS: {e}", exc_info=True)
+
+        try:
+            self.create_status_icon()
+        except Exception as e:
+            self.logger.error(f"Failed to create tray icon: {e}", exc_info=True)
 
         # Force window activation on startup if not running in change-only mode
         # This ensures visibility even if the OS doesn't send the 'activate' signal
@@ -234,6 +264,12 @@ class WallpaperApp(Gtk.Application):
 
     def create_status_icon(self):
         self.logger.debug("create_status_icon called.")
+
+        if not TRAY_SUPPORTED or AppIndicator3 is None:
+            self.logger.warning("Tray support is not available. Skipping tray icon creation.")
+            self.tray_available = False
+            return
+
         indicator_id = "wallshuffle-indicator"
 
         # Determine icon path using absolute paths
@@ -304,9 +340,12 @@ class WallpaperApp(Gtk.Application):
             init_icon = "image-x-generic"
             if icon_path and os.path.exists(icon_path):
                 init_icon = os.path.splitext(os.path.basename(icon_path))[0]
-            
+
             self.status_icon = AppIndicator3.Indicator.new(indicator_id, init_icon, AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
             self.logger.debug(f"AppIndicator3.Indicator.new called successfully with icon '{init_icon}'.")
+            
+            # Icon itself is created, so mark as available early
+            self.tray_available = True
 
             if icon_path and os.path.exists(icon_path):
                 self.status_icon.set_icon_theme_path(os.path.dirname(icon_path))
@@ -340,14 +379,17 @@ class WallpaperApp(Gtk.Application):
     def _create_indicator_menu(self):
         menu = Gtk.Menu()
         self.menu_item_next = Gtk.MenuItem(label="Next Wallpaper")
-        self.menu_item_pause = Gtk.MenuItem(label="Pause/Resume")
+        pause_label = "Resume" if self.paused else "Pause"
+        self.menu_item_pause = Gtk.MenuItem(label=pause_label)
         menu_item_open = Gtk.MenuItem(label="Open WallShuffle")
+        menu_item_support = Gtk.MenuItem(label="Support WallShuffle ☕")
         menu_item_about = Gtk.MenuItem(label="About")
         menu_item_quit = Gtk.MenuItem(label="Quit")
 
         self.menu_item_next.connect("activate", self.on_next_wallpaper_clicked)
         self.menu_item_pause.connect("activate", self.on_pause_resume_clicked)
         menu_item_open.connect("activate", self.on_open_wallshuffle_clicked)
+        menu_item_support.connect("activate", self.on_support_clicked)
         menu_item_about.connect("activate", self.on_about_clicked)
         menu_item_quit.connect("activate", self.on_quit_clicked)
 
@@ -355,6 +397,7 @@ class WallpaperApp(Gtk.Application):
         menu.append(self.menu_item_pause)
         menu.append(Gtk.SeparatorMenuItem())
         menu.append(menu_item_open)
+        menu.append(menu_item_support)
         menu.append(menu_item_about)
         menu.append(menu_item_quit)
 
@@ -477,6 +520,10 @@ class WallpaperApp(Gtk.Application):
                 self.menu_item_pause.set_label("Resume")
             else:
                 self.menu_item_pause.set_label("Pause")
+            
+            # Update UI label immediately
+            if self.win:
+                self.win.poll_timer_status()
         else:
             self.logger.error("Failed to change systemd timer state.")
             show_error_dialog(
@@ -491,6 +538,25 @@ class WallpaperApp(Gtk.Application):
     def on_open_wallshuffle_clicked(self, widget):
         self.logger.debug("Tray: Open WallShuffle clicked")
         self.do_activate()
+
+    def on_support_clicked(self, widget):
+        self.logger.debug("Tray: Support clicked")
+        import subprocess
+        donate_url = "https://buymeacoffee.com/wallshuffle"
+        try:
+            subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            self.logger.warning(f"Could not open donation URL: {e}")
+
+    def on_about_clicked(self, widget):
+        self.logger.debug("Tray: About clicked")
+        if self.win:
+            self.win.on_about_clicked(widget)
+        else:
+            # If window doesn't exist yet, we might need to create it or just ignore
+            self.do_activate()
+            if self.win:
+                self.win.on_about_clicked(widget)
 
     def on_quit_clicked(self, widget):
         self.logger.debug("Tray: Quit clicked")

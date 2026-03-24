@@ -11,10 +11,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .utils import CONFIG_DIR
-from .gui_helpers import show_error_dialog
 
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 CACHE_EXPIRATION_HOURS = 24
+
+class UnsplashConfigError(Exception):
+    """Exception raised when Unsplash API is not properly configured."""
+    pass
 
 
 class OnlineSourceManager:
@@ -133,8 +136,7 @@ class OnlineSourceManager:
         unsplash_api_key = self.config_manager.get_setting(self.config, "Settings", "unsplash_api_key", "YOUR_UNSPLASH_API_KEY")
         if unsplash_api_key == "YOUR_UNSPLASH_API_KEY":
             logging.error("Unsplash API key is not configured.")
-            show_error_dialog("Unsplash API key is not configured. Please set it in the settings.", parent=None)
-            return None
+            raise UnsplashConfigError("Unsplash API key is not configured. Please set it in the settings.")
         url = f"https://api.unsplash.com/photos/random?query={keywords}&client_id={unsplash_api_key}"
         try:
             # Use self.session instead of requests directly

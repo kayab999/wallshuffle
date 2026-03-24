@@ -3,9 +3,6 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
-
-
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.ini")

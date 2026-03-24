@@ -2,7 +2,9 @@ import logging
 import os
 import shutil
 import sys
+
 from .utils import escape_systemd_path
+
 
 def _find_executable_for_systemd():
     """

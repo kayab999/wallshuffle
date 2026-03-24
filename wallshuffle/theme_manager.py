@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 import datetime
 import logging
+import os
 
 import gi
 
@@ -25,29 +26,41 @@ class ThemeManager:
             logging.info(f"Loaded saved theme: {self.current_theme_name}")
         else:
             # If no theme is saved (first run) or saved theme is invalid, detect distro
-            distro_name = self.detect_distro()
-            if distro_name:
-                distro_name = distro_name.lower()
-            # Match detected distro name (e.g., "ubuntu") with theme key (e.g., "Ubuntu")
-            theme_key = next((k for k in THEMES.keys() if k.lower() == distro_name), "Default")
+            distro_id, distro_like = self.detect_distro()
+            
+            # Smart mapping logic
+            theme_key = "Default"
+            possible_ids = [distro_id, distro_like] if distro_like else [distro_id]
+            
+            for d_id in filter(None, possible_ids):
+                d_id = d_id.lower()
+                # Direct match or alias
+                found_key = next((k for k in THEMES.keys() if k.lower() == d_id or (d_id == "linuxmint" and k == "LinuxMint")), None)
+                if found_key:
+                    theme_key = found_key
+                    break
+            
             self.current_theme_name = theme_key
-            logging.info(f"Auto-detected theme based on distro '{distro_name}': {self.current_theme_name}")
+            logging.info(f"Auto-detected theme: {self.current_theme_name} (ID: {distro_id}, LIKE: {distro_like})")
             # Save the auto-detected theme so it persists
             self.set_theme_name(self.current_theme_name)
 
     def detect_distro(self):
-        """Detects the Linux distribution from /etc/os-release."""
+        """Detects the Linux distribution ID and ID_LIKE from /etc/os-release."""
+        distro_id = None
+        distro_like = None
         try:
-            with open("/etc/os-release") as f:
-                for line in f:
-                    if line.startswith("ID="):
-                        # Returns the ID value, e.g., "ubuntu", "fedora", "arch"
-                        return line.split("=")[1].strip().strip('"')
-        except FileNotFoundError:
-            logging.warning("/etc/os-release not found. Cannot detect distribution.")
+            if os.path.exists("/etc/os-release"):
+                with open("/etc/os-release") as f:
+                    for line in f:
+                        if line.startswith("ID="):
+                            distro_id = line.split("=")[1].strip().strip('"')
+                        elif line.startswith("ID_LIKE="):
+                            distro_like = line.split("=")[1].strip().strip('"')
+            return distro_id, distro_like
         except Exception as e:
             logging.error(f"Error reading /etc/os-release: {e}")
-        return None
+        return None, None
 
     def set_theme_name(self, name):
         """Changes the theme and saves it to the config."""
@@ -70,29 +83,48 @@ class ThemeManager:
             theme["button_text"] = self.config_manager.get_setting(self.config, "Settings", "custom_button_text", theme.get("button_text", "#FFFFFF"))
 
         css = f"""
+* {{
+    transition: background 200ms ease-in-out, border-color 200ms ease-in-out, box-shadow 200ms ease-in-out;
+}}
+
 #wallshuffle-main-window {{
     background-color: {theme["background"]};
     color: {theme["foreground"]};
+    font-family: sans-serif;
 }}
 
 /* Titles */
-.title-2 {{
+#wallshuffle-main-window .title-2 {{
     font-weight: bold;
-    font-size: 1.2em;
-    margin-bottom: 10px;
+    font-size: 1.3em;
+    margin-bottom: 12px;
     color: {theme["accent"]};
 }}
 
 /* Dim Labels */
-.dim-label {{
-    opacity: 0.7;
+#wallshuffle-main-window .dim-label {{
+    opacity: 0.65;
     font-size: 0.9em;
 }}
 
+/* Cards (Gtk.Frame) */
+#wallshuffle-main-window frame, #wallshuffle-main-window .card {{
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+}}
+
+#wallshuffle-main-window frame > border {{
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}}
+
 /* Flat Entries */
-entry.flat {{
+#wallshuffle-main-window entry.flat {{
     min-height: 0;
-    padding: 2px;
+    padding: 4px;
     background-color: transparent;
     border: none;
     box-shadow: none;
@@ -104,46 +136,70 @@ entry.flat {{
     color: {theme["foreground"]};
 }}
 
-#wallshuffle-main-window GtkButton {{
-    background-color: {theme["accent"]};
-    color: {theme.get("button_text", theme["foreground"])};
+/* Button System */
+#wallshuffle-main-window GtkButton, #wallshuffle-main-window button {{
     border-radius: 6px;
-    padding: 4px 12px;
+    padding: 6px 14px;
+    font-weight: 500;
+    transition: all 200ms ease-in-out;
+}}
+
+#wallshuffle-main-window .primary-button,
+#wallshuffle-main-window .suggested-action {{
+    background-color: {theme["accent"]};
+    color: {theme.get("button_text", "#FFFFFF")};
     border: none;
     font-weight: bold;
 }}
 
-#wallshuffle-main-window GtkButton:hover {{
-    opacity: 0.9;
+#wallshuffle-main-window .primary-button:hover,
+#wallshuffle-main-window .suggested-action:hover {{
+    background-color: {theme.get("hover", theme["accent"])};
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}}
+
+#wallshuffle-main-window .primary-button:active,
+#wallshuffle-main-window .suggested-action:active {{
+    opacity: 0.8;
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }}
 
-#wallshuffle-main-window GtkButton:active {{
-    opacity: 0.8;
+#wallshuffle-main-window .secondary-button {{
+    background-color: rgba(255, 255, 255, 0.1);
+    color: {theme["foreground"]};
+    border: 1px solid rgba(255, 255, 255, 0.2);
 }}
 
-/* Suggested Action Button (Save) */
-.suggested-action {{
-    background-color: {theme.get("accent_secondary", theme["accent"])};
+#wallshuffle-main-window .secondary-button:hover {{
+    background-color: rgba(255, 255, 255, 0.15);
+}}
+
+#wallshuffle-main-window .danger-button {{
+    background-color: #e53935;
     color: #ffffff;
+    border: none;
+}}
+
+#wallshuffle-main-window .danger-button:hover {{
+    background-color: #d32f2f;
 }}
 
 #wallshuffle-main-window GtkEntry {{
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: rgba(0, 0, 0, 0.2);
     color: {theme["foreground"]};
-    border: 1px solid {theme["accent"]};
-    border-radius: 4px;
-    padding: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px;
+}}
+
+#wallshuffle-main-window GtkEntry:focus {{
+    border-color: {theme["accent"]};
 }}
 
 #wallshuffle-main-window GtkComboBox GtkEntry {{
     background-color: transparent;
     border: none;
 }}
-
-/* Hero Section Preview Box styling (if we could target it by ID or class) */
-/* Assuming we didn't add a specific class to the box itself, ensuring generic polish */
-
 """
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(css.encode("utf-8"))

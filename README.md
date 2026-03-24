@@ -76,7 +76,12 @@ cd wallshuffle
 
 ## Troubleshooting
 
-- **Wayland Compatibility:** If you are running a Wayland session (common in Ubuntu 22.04+), WallShuffle automatically forces the **X11 backend (via XWayland)** to ensure the GTK3 interface renders correctly and remains visible. This is handled internally.
+- **Tray Icon Not Showing:** The application uses `AppIndicator3` (or `AyatanaAppIndicator3`) for the tray icon. If the icon is missing, ensure you have the required system libraries installed:
+  - **Ubuntu/Debian:** `sudo apt install gir1.2-ayatanaappindicator3-0.1` or `gir1.2-appindicator3-0.1`
+  - **Fedora:** `sudo dnf install libappindicator-gtk3`
+  - **Arch:** `sudo pacman -S libappindicator-gtk3`
+- **Wayland Compatibility:** If you are running a Wayland session (common in Ubuntu 22.04+), WallShuffle automatically forces the **X11 backend (via XWayland)** for stability. 
+  - If the tray icon is still missing on Wayland, you can try disabling the X11 force by setting the environment variable: `WALLSHUFFLE_FORCE_WAYLAND=1`.
 - **Systemd Dependency:** Wallshuffle uses `systemd` timers for scheduling. This will not work on non-systemd distros (e.g., Devuan, Artix).
 - **libfuse2:** AppImages require `libfuse2`. If the app won't start, run: `sudo apt install libfuse2`.
 

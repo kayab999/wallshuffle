@@ -44,7 +44,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
         Uses singleton ConfigManager to ensure consistent state across calls.
     """
     logging.info("--- Running change_wallpaper ---")
-    
+
     # Log execution context
     display = os.environ.get("DISPLAY", "NOT SET")
     wayland = os.environ.get("WAYLAND_DISPLAY", "NOT SET")
@@ -162,7 +162,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
                         if random_order:
                             image_paths = random.sample(found_images, images_needed)
                         else:
-                            # State for sequential isn't purely persisted. 
+                            # State for sequential isn't purely persisted.
                             # Since we don't track the last shown index globally, default to first N images.
                             image_paths = found_images[:images_needed]
                     else:
@@ -186,6 +186,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
     elif source == "Unsplash":
         keywords = config_manager.get_setting(config, "Settings", "keywords", "")
         logging.info(f"Source: Unsplash, Keywords: {keywords}")
+        from .online_sources import OnlineSourceManager, UnsplashConfigError
         online_source_manager = OnlineSourceManager(config_manager, config)
         try:
             # Current online source logic fetches only one.
@@ -205,6 +206,9 @@ def change_wallpaper() -> WallpaperUpdateResult:
             while len(image_paths) < images_needed:
                  image_paths.append(image_paths[0])
 
+        except UnsplashConfigError as e:
+            logging.error(f"Unsplash configuration error: {e}")
+            return WallpaperUpdateResult.CONFIGURATION_ERROR
         except Exception as e:
             logging.error(f"Network error fetching from Unsplash: {e}")
             return WallpaperUpdateResult.NETWORK_ERROR
@@ -217,8 +221,10 @@ def change_wallpaper() -> WallpaperUpdateResult:
 
         logging.info(f"Source: URL, Fetching from: {hyperlink_url}")
         try:
-            import requests
             import tempfile
+
+            import requests
+
             from .utils import CONFIG_DIR
 
             response = requests.get(hyperlink_url, stream=True, timeout=15)
@@ -230,7 +236,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
                 image_path = f.name
-            
+
             image_paths = [image_path] * images_needed
 
         except requests.exceptions.RequestException as e:
@@ -303,7 +309,7 @@ def change_wallpaper() -> WallpaperUpdateResult:
     logging.info(f"Applying wallpaper with mode: {mode}, images: {len(final_image_paths)}")
 
     if manager.apply_desktop_settings(mode, final_image_paths, background_color):
-        
+
         # Proactive Safe Temp File Cleanup
         try:
             from .utils import CONFIG_DIR

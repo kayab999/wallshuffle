@@ -4,8 +4,10 @@ import subprocess
 import sys
 
 import gi
+
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib
+
 
 def show_error_dialog(message, parent=None):
     logging.error(f"Error: {message}")

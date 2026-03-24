@@ -9,7 +9,12 @@ def configure_backend():
     """
     Detects the session type and forces X11 backend for GTK3 if running on Wayland.
     This fixes invisibility/positioning bugs on modern GNOME/KDE.
+    Can be overridden by setting WALLSHUFFLE_FORCE_WAYLAND=1.
     """
+    if os.environ.get("WALLSHUFFLE_FORCE_WAYLAND") == "1":
+        print("WALLSHUFFLE_FORCE_WAYLAND=1 detected. Not forcing X11 backend.", file=sys.stderr)
+        return
+
     session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
     if "wayland" in session_type:
         # Check if we are forcing a specific backend via CLI args first

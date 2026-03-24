@@ -1,7 +1,5 @@
 import logging
 import os
-import shutil
-import sys
 import threading
 
 import gi
@@ -9,15 +7,14 @@ import gi
 from . import __version__
 from .constants import SUPPORTED_EXTENSIONS
 from .core import WallpaperUpdateResult, change_wallpaper
+from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
 from .themes import THEMES
-from .utils import CONFIG_DIR, escape_systemd_path
-from .gui_helpers import show_error_dialog
+from .utils import CONFIG_DIR
 from .wallpaper_manager import WallpaperManager
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
-
 
 from .system_integration import setup_systemd_timer
 
@@ -65,6 +62,10 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         logging.debug("Updating image count")
         self.update_image_count()
 
+        # Start status polling
+        GLib.timeout_add(1000, self.poll_timer_status) # Start after 1s
+        GLib.timeout_add_seconds(30, self.poll_timer_status) # Every 30s
+
         self.connect("delete-event", self.on_delete_event)
         self.connect("focus-out-event", self.on_focus_out)
 
@@ -81,9 +82,27 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         logging.info("WallpaperAppWindow initialization successful")
 
     def on_delete_event(self, widget, event):
+        if self.app and not self.app.tray_available:
+            logging.info("Tray icon not available. Quitting application instead of hiding.")
+            self.app.quit()
+            return False
+
         logging.warning("DELETE EVENT TRIGGERED - Hiding window")
         self.hide()
         return True
+
+    def poll_timer_status(self):
+        """Polls the systemd timer status and updates the UI."""
+        if not self.is_systemd_available:
+            self.lbl_next_change.set_text("systemd not available")
+            return False # Stop polling
+
+        def update():
+            next_run = self.wallpaper_manager.get_timer_next_run()
+            GLib.idle_add(self.lbl_next_change.set_text, f"Next change: {next_run}")
+
+        threading.Thread(target=update, daemon=True).start()
+        return True # Keep polling
 
     def on_focus_out(self, widget, event):
         logging.warning("FOCUS OUT EVENT TRIGGERED")
@@ -127,12 +146,14 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         header.pack_end(self.btn_save)
 
         self.btn_about = Gtk.Button()
+        self.btn_about.get_style_context().add_class("secondary-button")
         self.btn_about.set_image(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON))
         self.btn_about.set_tooltip_text("General Information")
         self.btn_about.connect("clicked", self.on_about_clicked)
         header.pack_end(self.btn_about)
 
         self.btn_apply_now = Gtk.Button(label="Next Wallpaper")
+        self.btn_apply_now.get_style_context().add_class("primary-button")
         self.btn_apply_now.set_image(Gtk.Image.new_from_icon_name("media-skip-forward-symbolic", Gtk.IconSize.BUTTON))
         self.btn_apply_now.connect("clicked", self.on_next_wallpaper_clicked)
         header.pack_start(self.btn_apply_now)
@@ -149,9 +170,13 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         parent.pack_start(self.info_bar_de, False, False, 0)
 
     def _build_hero_section(self, parent):
+        frame = Gtk.Frame()
+        frame.get_style_context().add_class("card")
+        parent.pack_start(frame, False, False, 0)
+
         hero_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         hero_box.set_halign(Gtk.Align.CENTER)
-        parent.pack_start(hero_box, False, False, 0)
+        frame.add(hero_box)
 
         self.preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         hero_box.pack_start(self.preview_box, False, False, 0)
@@ -178,14 +203,21 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         info_vbox.pack_start(self.lbl_source_status, False, False, 0)
 
     def _build_source_section(self, parent):
+        frame = Gtk.Frame()
+        frame.get_style_context().add_class("card")
+        parent.pack_start(frame, False, False, 0)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        frame.add(vbox)
+
         lbl_section = Gtk.Label(label="Source")
         lbl_section.set_halign(Gtk.Align.START)
-        lbl_section.set_markup("<b>Source</b>")
-        parent.pack_start(lbl_section, False, False, 0)
+        lbl_section.set_markup("<span size='large' weight='bold'>Source</span>")
+        vbox.pack_start(lbl_section, False, False, 0)
 
         source_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         source_box.set_margin_start(10)
-        parent.pack_start(source_box, False, False, 0)
+        vbox.pack_start(source_box, False, False, 0)
 
         self.combo_source = Gtk.ComboBoxText()
         for source in self.sources:
@@ -206,6 +238,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.combo_folders.connect("changed", self.on_folder_changed)
 
         self.btn_manage_folders = Gtk.Button(label="Manage Sources...")
+        self.btn_manage_folders.get_style_context().add_class("secondary-button")
         self.btn_manage_folders.connect("clicked", self.on_manage_folders_clicked)
 
         hbox_folder.pack_start(self.combo_folders, True, True, 0)
@@ -234,6 +267,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.entry_keywords.set_placeholder_text("nature, architecture")
 
         self.btn_test_unsplash = Gtk.Button(label="Test Connection")
+        self.btn_test_unsplash.get_style_context().add_class("secondary-button")
         self.btn_test_unsplash.connect("clicked", self.on_test_unsplash_clicked)
 
         page_unsplash.attach(self.lbl_api_key, 0, 0, 1, 1)
@@ -258,16 +292,23 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.stack_source.add_named(page_url, "URL / Hyperlink")
 
     def _build_settings_section(self, parent):
+        frame = Gtk.Frame()
+        frame.get_style_context().add_class("card")
+        parent.pack_start(frame, False, False, 0)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        frame.add(vbox)
+
         lbl_section = Gtk.Label(label="Settings")
         lbl_section.set_halign(Gtk.Align.START)
-        lbl_section.set_markup("<b>Settings</b>")
-        parent.pack_start(lbl_section, False, False, 0)
+        lbl_section.set_markup("<span size='large' weight='bold'>Settings</span>")
+        vbox.pack_start(lbl_section, False, False, 0)
 
         grid = Gtk.Grid()
         grid.set_column_spacing(20)
         grid.set_row_spacing(15)
         grid.set_margin_start(10)
-        parent.pack_start(grid, False, False, 0)
+        vbox.pack_start(grid, False, False, 0)
 
         # Mode
         grid.attach(Gtk.Label(label="Scaling:", halign=Gtk.Align.START), 0, 0, 1, 1)
@@ -339,7 +380,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             self.combo_multi_monitor.append_text(m)
         self.combo_multi_monitor.connect("changed", self.on_multi_monitor_changed)
         grid.attach(self.combo_multi_monitor, 1, 3, 3, 1)
-        
+
         # Random Order (Moved out of Automation for visibility)
         grid.attach(Gtk.Label(label="Sequence:", halign=Gtk.Align.START), 0, 4, 1, 1)
         self.check_random_order = Gtk.CheckButton(label="Random Order")
@@ -479,7 +520,9 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             if text == "Local Folder":
                  self.update_image_count()
             elif text == "URL / Hyperlink":
-                 self.lbl_source_status.set_text("✓ Online image" if (hasattr(self, 'entry_url') and self.entry_url.get_text().startswith("http")) else "⚠ Enter a valid URL")
+                url_valid = hasattr(self, "entry_url") and self.entry_url.get_text().startswith("http")
+                status_text = "✓ Online image" if url_valid else "⚠ Enter a valid URL"
+                self.lbl_source_status.set_text(status_text)
             else:
                  self.lbl_source_status.set_text("✓ Unsplash Source")
 
@@ -500,6 +543,10 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         threading.Thread(target=run_test, daemon=True).start()
 
     def _on_test_complete(self, success, message):
+        # Guard against processing if window is being destroyed/closed
+        if not self.get_realized():
+            return False
+
         self.btn_test_unsplash.set_sensitive(True)
         self.btn_test_unsplash.set_label("Test Connection")
 
@@ -575,7 +622,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
             multi_monitor_mode = settings.get("multi_monitor_mode", "Single image on all monitors")
             safe_set_active(self.combo_multi_monitor, multi_monitor_mode, self.multi_monitor_modes)
-            
+
             url = settings.get("hyperlink_url", "")
             if hasattr(self, 'entry_url'):
                 self.entry_url.set_text(url)
@@ -874,7 +921,10 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             ).start()
 
         if hide_window:
-            self.hide()
+            if self.app and not self.app.tray_available:
+                 logging.info("Tray icon not available. Keeping window visible after save.")
+            else:
+                self.hide()
 
 
     def on_about_clicked(self, widget):

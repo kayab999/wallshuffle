@@ -9,9 +9,10 @@ import threading
 import gi
 from PIL import Image
 
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib
+# Deferred imports for Gdk/GLib to avoid crashes in headless environments
+
 from .constants import GNOME_COMPAT
+
 
 class WallpaperManager:
     # Desktop environment categories
@@ -139,6 +140,44 @@ class WallpaperManager:
         self.logger.warning("Could not detect desktop environment via any method. Returning 'unknown'.")
         return "unknown"
 
+    def check_timer_active(self):
+        """Checks if the wallpaper-changer.timer is currently active in systemd."""
+        if not shutil.which("systemctl"):
+            return False
+        
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", "wallpaper-changer.timer"],
+                capture_output=True, text=True, timeout=2
+            )
+            return result.stdout.strip() == "active"
+        except Exception as e:
+            self.logger.error(f"Failed to check timer status: {e}")
+            return False
+
+    def get_timer_next_run(self):
+        """Returns a string describing when the timer will next run."""
+        if not shutil.which("systemctl"):
+            return "systemd not found"
+        
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "list-timers", "wallpaper-changer.timer", "--format=json"],
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                if data and len(data) > 0:
+                    next_run = data[0].get("next", "Unknown")
+                    left = data[0].get("left", "Unknown")
+                    if "n/a" in next_run.lower():
+                        return "Paused"
+                    return f"{left} ({next_run})"
+            return "Inactive"
+        except Exception as e:
+            self.logger.debug(f"Failed to get timer next run: {e}")
+            return "Error"
+
     def _run_subprocess(self, command, description="", timeout=10):
         """Helper to run shell commands safely."""
         try:
@@ -164,6 +203,7 @@ class WallpaperManager:
 
         def callback():
             try:
+                from gi.repository import GLib
                 result_container["info"] = self._get_monitor_info_main()
             except Exception as e:
                 self.logger.error(f"Error getting monitor info on main thread: {e}")
@@ -171,9 +211,14 @@ class WallpaperManager:
                 event.set()
             return False
 
-        GLib.idle_add(callback)
-        if not event.wait(timeout=2.0):
-            self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to xrandr.")
+        try:
+            from gi.repository import GLib
+            GLib.idle_add(callback)
+            if not event.wait(timeout=2.0):
+                self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to xrandr.")
+                return self._get_monitor_info_xrandr()
+        except ImportError:
+            self.logger.warning("GLib/Gdk not available. Falling back to xrandr.")
             return self._get_monitor_info_xrandr()
 
         return result_container["info"]
@@ -211,6 +256,8 @@ class WallpaperManager:
         """Internal method to get monitor info using Gdk (Must run on Main Thread)."""
         monitor_info = []
         try:
+            gi.require_version("Gdk", "3.0")
+            from gi.repository import Gdk
             display = Gdk.Display.get_default()
             if not display:
                 display = Gdk.Display.open_default_libgtk_only()
@@ -450,12 +497,24 @@ class WallpaperManager:
         if not image_paths:
             return False
 
+        # Validate image paths
+        valid_paths = []
+        for p in image_paths:
+            if p and os.path.isfile(p):
+                valid_paths.append(os.path.abspath(p))
+            else:
+                self.logger.warning(f"Invalid image path ignored: {p}")
+
+        if not valid_paths:
+            self.logger.error("No valid image paths provided.")
+            return False
+
         if self.desktop_environment in GNOME_COMPAT:
-            return self.apply_gnome_settings(mode, image_paths, background_color)
+            return self.apply_gnome_settings(mode, valid_paths, background_color)
         elif self.desktop_environment == "kde":
-            return self.apply_kde_settings(mode, image_paths, background_color)
+            return self.apply_kde_settings(mode, valid_paths, background_color)
         elif self.desktop_environment == "xfce":
-            return self.apply_xfce_settings(mode, image_paths, background_color)
+            return self.apply_xfce_settings(mode, valid_paths, background_color)
 
         self.logger.warning(f"DE '{self.desktop_environment}' not supported.")
         return False
