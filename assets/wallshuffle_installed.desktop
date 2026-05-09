@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=WallShuffle
-Exec=/home/carlos/.local/bin/wallshuffle
+Exec=wallshuffle
 Icon=wallshuffle
 Type=Application
 Categories=Utility;

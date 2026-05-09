@@ -38,7 +38,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.config_manager = self.app.config_manager
         self.config = self.app.config
         self.wallpaper_manager = WallpaperManager()
-        self.theme_manager = self.app.theme_manager
+        self.theme_manager = getattr(self.app, "theme_manager", None)
+        self._polling_in_progress = False
 
         # Initialize data lists
         self.sources = ["Local Folder", "Unsplash", "URL / Hyperlink"]
@@ -62,12 +63,15 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         logging.debug("Updating image count")
         self.update_image_count()
 
-        # Start status polling
-        GLib.timeout_add(1000, self.poll_timer_status) # Start after 1s
-        GLib.timeout_add_seconds(30, self.poll_timer_status) # Every 30s
+        # Start adaptive status polling (5s when focused, 30s when not)
+        self._poll_timeout_id = None
+        self._poll_interval_seconds = 5
+        GLib.timeout_add(1000, self.poll_timer_status)  # Initial poll after 1s
+        self._start_adaptive_poll()
 
         self.connect("delete-event", self.on_delete_event)
-        self.connect("focus-out-event", self.on_focus_out)
+        self.connect("focus-in-event", self._on_focus_in)
+        self.connect("focus-out-event", self._on_focus_out)
 
         if self.app.css_provider:
             logging.debug("Applying CSS provider")
@@ -97,16 +101,60 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             self.lbl_next_change.set_text("systemd not available")
             return False # Stop polling
 
+        if self._polling_in_progress:
+            logging.debug("Status poll already in progress. Skipping to avoid thread exhaustion.")
+            return True
+
+        self._polling_in_progress = True
+
         def update():
-            next_run = self.wallpaper_manager.get_timer_next_run()
-            GLib.idle_add(self.lbl_next_change.set_text, f"Next change: {next_run}")
+            try:
+                next_run = self.wallpaper_manager.get_timer_next_run()
+                GLib.idle_add(self._on_poll_complete, next_run)
+            except Exception as e:
+                logging.error(f"Error polling timer status: {e}")
+                GLib.idle_add(self._on_poll_complete, "Error")
 
         threading.Thread(target=update, daemon=True).start()
         return True # Keep polling
 
-    def on_focus_out(self, widget, event):
-        logging.warning("FOCUS OUT EVENT TRIGGERED")
+    def _on_poll_complete(self, next_run):
+        """Callback to update UI and release polling lock."""
+        if self.get_realized():
+            self.lbl_next_change.set_text(f"Next change: {next_run}")
+        self._polling_in_progress = False
+
+    def _on_focus_out(self, widget, event):
+        logging.debug("Window lost focus. Slowing down polling.")
+        self._poll_interval_seconds = 30
+        self._start_adaptive_poll()
         return False  # Propagate event
+
+    def _start_adaptive_poll(self):
+        """Restarts the adaptive poll with the current interval."""
+        if hasattr(self, "_poll_timeout_id") and self._poll_timeout_id:
+            GLib.source_remove(self._poll_timeout_id)
+        
+        self._poll_timeout_id = GLib.timeout_add_seconds(
+            self._poll_interval_seconds, 
+            self._adaptive_poll
+        )
+
+    def _adaptive_poll(self):
+        """Adaptive polling logic called by GLib.timeout."""
+        if not self.get_visible():
+            return True # Keep repeating but window is hidden
+            
+        self.poll_timer_status()
+        return True # Repeat timer
+
+    def _on_focus_in(self, widget, event):
+        """Immediately refresh status when window regains focus and speed up polling."""
+        logging.debug("Window focused. Speeding up polling.")
+        self.poll_timer_status()
+        self._poll_interval_seconds = 5
+        self._start_adaptive_poll()
+        return False
 
     def init_ui(self):
         self._build_header_bar()
@@ -145,6 +193,12 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.btn_save.connect("clicked", self.on_save_clicked)
         header.pack_end(self.btn_save)
 
+        self.btn_refresh = Gtk.Button()
+        self.btn_refresh.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
+        self.btn_refresh.set_tooltip_text("Refresh Status")
+        self.btn_refresh.connect("clicked", lambda w: self.poll_timer_status())
+        header.pack_end(self.btn_refresh)
+
         self.btn_about = Gtk.Button()
         self.btn_about.get_style_context().add_class("secondary-button")
         self.btn_about.set_image(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON))
@@ -168,6 +222,17 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         content_area.add(lbl)
         self.info_bar_de.set_visible(not self.is_de_supported)
         parent.pack_start(self.info_bar_de, False, False, 0)
+
+        # Theme failure warning
+        self.info_bar_theme = Gtk.InfoBar()
+        self.info_bar_theme.set_message_type(Gtk.MessageType.WARNING)
+        self.info_bar_theme.set_no_show_all(True)
+        content_area_theme = self.info_bar_theme.get_content_area()
+        lbl_theme = Gtk.Label(label="Theme could not be loaded. The app may look different than expected. Check logs for details.")
+        lbl_theme.set_line_wrap(True)
+        content_area_theme.add(lbl_theme)
+        self.info_bar_theme.set_visible(self.app.theme_manager is None)
+        parent.pack_start(self.info_bar_theme, False, False, 0)
 
     def _build_hero_section(self, parent):
         frame = Gtk.Frame()
@@ -335,8 +400,9 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             self.combo_theme.append_text(name)
 
         current_theme = "Ubuntu"
-        if self.app and hasattr(self.app, "theme_manager"):
-            current_theme = self.app.theme_manager.current_theme_name
+        theme_manager = getattr(self.app, "theme_manager", None)
+        if theme_manager:
+            current_theme = theme_manager.current_theme_name
         self.combo_theme.set_active(list(THEMES.keys()).index(current_theme) if current_theme in THEMES else 0)
         self.combo_theme.connect("changed", self._on_theme_changed)
         grid.attach(self.combo_theme, 3, 1, 1, 1)
@@ -649,6 +715,24 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             else:
                 self.box_custom_colors.hide()
 
+            # Proactively reload CSS if theme changed or on startup
+            if self.app and self.app.theme_manager:
+                try:
+                    # Update theme manager config
+                    self.app.theme_manager.config = self.config
+                    css_provider = self.app.theme_manager.get_css_provider()
+                    
+                    # Apply to this window
+                    style_context = self.get_style_context()
+                    if hasattr(self.app, 'css_provider') and self.app.css_provider:
+                         style_context.remove_provider(self.app.css_provider)
+                    
+                    self.app.css_provider = css_provider
+                    style_context.add_provider(self.app.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+                    logging.info(f"Theme '{theme_name}' applied successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to reload theme: {e}")
+
             bg_color_str = settings.get("background_color", "#000000")
             color = Gdk.RGBA()
             if color.parse(bg_color_str):
@@ -821,11 +905,14 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
         self.preview_box.show_all()
 
-    def _handle_change_result(self, result):
+    def _handle_change_result(self, result: WallpaperUpdateResult, error_message: str):
         """Handles the result from change_wallpaper on the main GTK thread."""
         if result == WallpaperUpdateResult.SUCCESS:
             self.update_current_wallpaper_label()
         else:
+            # Use the specific error message if provided, otherwise fall back to generic
+            message = error_message if error_message else "An unknown error occurred."
+
             error_map = {
                 WallpaperUpdateResult.NO_SOURCE_CONFIGURED: "No wallpaper source is configured. Please check your settings.",
                 WallpaperUpdateResult.NO_IMAGES_FOUND: "No images were found. If using Unsplash, check your API key.",
@@ -834,8 +921,12 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
                 WallpaperUpdateResult.COMMAND_FAILED: "The command to set the wallpaper failed. Check logs for details.",
                 WallpaperUpdateResult.CONFIGURATION_ERROR: "Configuration error. Please check your settings.",
                 WallpaperUpdateResult.FILE_SYSTEM_ERROR: "A file system error occurred. Check permissions and paths.",
+                WallpaperUpdateResult.DESKTOP_ENVIRONMENT_ERROR: "Failed to apply wallpaper settings to your desktop environment.",
             }
-            message = error_map.get(result, "An unknown error occurred.")
+            # If a specific error message was not provided by core.py, use the generic one from the map
+            if not error_message:
+                message = error_map.get(result, message)
+
             show_error_dialog(message, self)
 
         # Re-enable the button
@@ -846,8 +937,8 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.on_save_clicked(widget, hide_window=False, skip_timer_setup=True)
 
         def change_and_update():
-            result = change_wallpaper()
-            GLib.idle_add(self._handle_change_result, result)
+            result, error_msg = change_wallpaper()
+            GLib.idle_add(self._handle_change_result, result, error_msg)
 
         try:
             self.btn_apply_now.set_sensitive(False)
@@ -907,6 +998,10 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
         if not self.config_manager.save_settings(self.config, settings_dict):
             return
+
+        # Refresh UI components after saving
+        self.load_settings()
+        self.poll_timer_status()
 
         # Only run systemd setup when explicitly saving (not during auto-save for Next Wallpaper)
         if not skip_timer_setup:
@@ -1024,7 +1119,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
     def _on_donate_clicked(self, widget):
         import subprocess
-        donate_url = "https://buymeacoffee.com/wallshuffle"
+        donate_url = "https://buymeacoffee.com/kayabsoftware"
         try:
             subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:

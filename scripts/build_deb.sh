@@ -13,26 +13,27 @@ rm -f "${APP_NAME}_${VERSION}_${ARCH}.deb"
 echo "Creating directory structure..."
 mkdir -p "$BUILD_DIR/DEBIAN"
 mkdir -p "$BUILD_DIR/usr/bin"
-mkdir -p "$BUILD_DIR/usr/share/$APP_NAME"
+mkdir -p "$BUILD_DIR/usr/lib/$APP_NAME"
 mkdir -p "$BUILD_DIR/usr/share/applications"
 mkdir -p "$BUILD_DIR/usr/share/pixmaps"
 
 echo "Copying application files..."
 # Copy the python package
-cp -r wallshuffle "$BUILD_DIR/usr/share/$APP_NAME/"
+cp -r wallshuffle "$BUILD_DIR/usr/lib/$APP_NAME/"
 # Remove bytecode
-find "$BUILD_DIR/usr/share/$APP_NAME" -name "__pycache__" -exec rm -rf {} +
+find "$BUILD_DIR/usr/lib/$APP_NAME" -name "__pycache__" -exec rm -rf {} +
 
 echo "Creating launcher script..."
-cat <<EOF > "$BUILD_DIR/usr/bin/$APP_NAME"
+cat <<'EOF' > "$BUILD_DIR/usr/bin/$APP_NAME"
 #!/bin/bash
-export PYTHONPATH="/usr/share/$APP_NAME"
-exec python3 -m wallshuffle "\$@"
+# Set PYTHONPATH to include the lib directory
+export PYTHONPATH="/usr/lib/wallshuffle:$PYTHONPATH"
+# Run as module
+exec /usr/bin/python3 -m wallshuffle "$@"
 EOF
 chmod 755 "$BUILD_DIR/usr/bin/$APP_NAME"
 
 echo "Creating .desktop file..."
-# Ensure the Icon path is correct or uses the system icon name
 cat <<EOF > "$BUILD_DIR/usr/share/applications/$APP_NAME.desktop"
 [Desktop Entry]
 Name=WallShuffle
@@ -46,7 +47,7 @@ StartupNotify=true
 EOF
 
 echo "Copying icon..."
-cp icon.png "$BUILD_DIR/usr/share/pixmaps/$APP_NAME.png"
+cp assets/icon.png "$BUILD_DIR/usr/share/pixmaps/$APP_NAME.png"
 
 echo "Creating control file..."
 cat <<EOF > "$BUILD_DIR/DEBIAN/control"
@@ -63,10 +64,10 @@ Description: A GTK-based wallpaper changer for Linux desktops.
 EOF
 
 echo "Creating postinst script..."
-cat <<EOF > "$BUILD_DIR/DEBIAN/postinst"
+cat <<'EOF' > "$BUILD_DIR/DEBIAN/postinst"
 #!/bin/bash
 set -e
-if [ "\$1" = "configure" ]; then
+if [ "$1" = "configure" ]; then
     update-desktop-database -q || true
 fi
 EOF

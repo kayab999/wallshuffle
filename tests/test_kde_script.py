@@ -14,8 +14,8 @@ class TestKDEScriptGeneration(unittest.TestCase):
 
         self.assertIn("desktops()", script)
         self.assertIn("org.kde.image", script)
-        self.assertIn("writeConfig('Image'", script)
-        self.assertIn("writeConfig('FillMode'", script)
+        self.assertIn('d.writeConfig("Image"', script)
+        self.assertIn('d.writeConfig("FillMode"', script)
 
     def test_path_escaping(self):
         """Verify dangerous paths are quoted correctly"""
@@ -23,7 +23,6 @@ class TestKDEScriptGeneration(unittest.TestCase):
         dangerous_path = "/home/user/My 'Cool' Wallpaper.jpg"
         script = self.manager._generate_kde_script(dangerous_path, "zoom")
 
-        # shlex.quote should wrap it in single quotes and escape internal single quotes
         # We assert that the filename is present but likely split up by escaping chars.
         # Checking for the base filename parts is enough to verify it wasn't dropped.
         self.assertIn("My ", script)
@@ -38,11 +37,12 @@ class TestKDEScriptGeneration(unittest.TestCase):
         script_zoom = self.manager._generate_kde_script("/img.jpg", "zoom")
 
         # Expect the resolved integer for zoom (2)
-        self.assertIn("d.writeConfig('FillMode', 2)", script_zoom)
+        self.assertIn('d.writeConfig("FillMode", 2)', script_zoom)
 
         script_scaled = self.manager._generate_kde_script("/img.jpg", "scaled")
         # Expect the resolved integer for scaled (1)
-        self.assertIn("d.writeConfig('FillMode', 1)", script_scaled)
+        self.assertIn('d.writeConfig("FillMode", 1)', script_scaled)
+
 
 if __name__ == "__main__":
     unittest.main()

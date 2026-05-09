@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import threading
+from typing import Any, Dict, List
 
 import gi
 from PIL import Image
@@ -74,7 +75,7 @@ class WallpaperManager:
             try:
                 # Remove the entire directory and recreate it to ensure it's empty
                 shutil.rmtree(temp_dir)
-                os.makedirs(temp_dir, exist_ok=True)
+                os.makedirs(temp_dir, mode=0o700, exist_ok=True)
                 self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
             except Exception as e:
                 self.logger.error(f"Failed to clean up temporary directory: {e}")
@@ -144,7 +145,7 @@ class WallpaperManager:
         """Checks if the wallpaper-changer.timer is currently active in systemd."""
         if not shutil.which("systemctl"):
             return False
-        
+
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "is-active", "wallpaper-changer.timer"],
@@ -159,7 +160,7 @@ class WallpaperManager:
         """Returns a string describing when the timer will next run."""
         if not shutil.which("systemctl"):
             return "systemd not found"
-        
+
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "list-timers", "wallpaper-changer.timer", "--format=json"],
@@ -179,26 +180,42 @@ class WallpaperManager:
             return "Error"
 
     def _run_subprocess(self, command, description="", timeout=10):
-        """Helper to run shell commands safely."""
+        """Helper to run shell commands safely. Returns (success: bool, error_message: str)."""
+        if isinstance(command, str):
+            command = command.split()
+            
         try:
-            self.logger.debug(f"Exec: {' '.join(command)} ({description})")
-            subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
-            return True
+            cmd_str = ' '.join(command)
+            self.logger.debug(f"Executing: {cmd_str} ({description})")
+            result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
+            if result.stderr:
+                self.logger.warning(f"Command '{' '.join(command)}' produced stderr: {result.stderr.strip()}")
+            return True, ""
         except subprocess.TimeoutExpired:
-            self.logger.error(f"Failed {description}: Timeout ({timeout}s)")
-            return False
+            msg = f"Failed {description}: Timeout ({timeout}s)"
+            self.logger.error(msg)
+            return False, msg
+        except subprocess.CalledProcessError as e:
+            msg = f"Failed {description}: Command '{' '.join(command)}' returned non-zero exit status {e.returncode}. Stderr: {e.stderr.strip()}"
+            self.logger.error(msg)
+            return False, msg
+        except FileNotFoundError:
+            msg = f"Failed {description}: Command '{command[0]}' not found. Is it installed and in your PATH?"
+            self.logger.error(msg)
+            return False, msg
         except Exception as e:
-            self.logger.error(f"Failed {description}: {e}")
-            return False
+            msg = f"Failed {description}: Unexpected error: {e}"
+            self.logger.error(msg)
+            return False, msg
 
-    def get_monitor_info(self):
+    def get_monitor_info(self) -> List[Dict[str, Any]]:
         """Returns geometry for all detected monitors (Thread-Safe)."""
         # If we are already on the main thread, run directly
         if threading.current_thread() is threading.main_thread():
             return self._get_monitor_info_main()
 
         # Otherwise, schedule on main thread and wait
-        result_container = {"info": []}
+        result_container: Dict[str, Any] = {"info": []}
         event = threading.Event()
 
         def callback():
@@ -215,46 +232,90 @@ class WallpaperManager:
             from gi.repository import GLib
             GLib.idle_add(callback)
             if not event.wait(timeout=2.0):
-                self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to xrandr.")
-                return self._get_monitor_info_xrandr()
+                self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to headless detection.")
+                return self._get_monitor_info_headless()
         except ImportError:
-            self.logger.warning("GLib/Gdk not available. Falling back to xrandr.")
-            return self._get_monitor_info_xrandr()
+            self.logger.warning("GLib/Gdk not available. Falling back to headless detection.")
+            return self._get_monitor_info_headless()
 
         return result_container["info"]
 
-    def _get_monitor_info_xrandr(self):
-        """Fallback monitor detection via xrandr (works without GLib MainLoop)."""
+    def _get_monitor_info_headless(self) -> List[Dict[str, Any]]:
+        """Fallback monitor detection for headless mode (try xrandr, then /sys/class/drm)."""
+        # Try xrandr first if available
+        if shutil.which("xrandr"):
+            try:
+                import re
+                result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    monitor_info = []
+                    pattern = re.compile(r" connected (?:primary )?(\d+)x(\d+)\+(\d+)\+(\d+)")
+                    for idx, line in enumerate(result.stdout.splitlines()):
+                        match = pattern.search(line)
+                        if match:
+                            w, h, x, y = map(int, match.groups())
+                            monitor_info.append({
+                                "name": f"Monitor-{idx}",
+                                "width": w, "height": h,
+                                "x": x, "y": y,
+                            })
+                    if monitor_info:
+                        self.logger.debug(f"xrandr fallback detected monitors: {monitor_info}")
+                        return monitor_info
+            except Exception as e:
+                self.logger.error(f"xrandr fallback failed: {e}")
+
+        # Last resort: Try /sys/class/drm (Linux only)
+        return self._get_monitor_info_drm()
+
+    def _get_monitor_info_drm(self) -> List[Dict[str, Any]]:
+        """Last resort monitor detection by reading /sys/class/drm (no coordinates, just counts)."""
         monitor_info = []
-        if not shutil.which("xrandr"):
-            self.logger.warning("xrandr not found, cannot detect monitors in headless mode.")
+        drm_path = "/sys/class/drm"
+        if not os.path.isdir(drm_path):
             return monitor_info
 
         try:
-            import re
-            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                pattern = re.compile(r" connected (?:primary )?(\d+)x(\d+)\+(\d+)\+(\d+)")
-                for idx, line in enumerate(result.stdout.splitlines()):
-                    match = pattern.search(line)
-                    if match:
-                        w, h, x, y = map(int, match.groups())
-                        monitor_info.append({
-                            "name": f"Monitor-{idx}",
-                            "width": w, "height": h,
-                            "x": x, "y": y,
-                        })
-                self.logger.debug(f"xrandr fallback detected monitors: {monitor_info}")
-            else:
-                self.logger.error(f"xrandr query failed with code {result.returncode}")
+            current_x = 0
+            for entry in sorted(os.listdir(drm_path)):
+                path = os.path.join(drm_path, entry)
+                # Filter for cardX-OUTPUT or just OUTPUT directories that are connected
+                if not os.path.exists(os.path.join(path, "status")):
+                    continue
+                
+                with open(os.path.join(path, "status"), "r") as f:
+                    if f.read().strip() != "connected":
+                        continue
+
+                # Try to get resolution from 'modes' file
+                width, height = 1920, 1080 # Reasonable default
+                modes_path = os.path.join(path, "modes")
+                if os.path.exists(modes_path):
+                    with open(modes_path, "r") as f:
+                        line = f.readline().strip()
+                        if line and "x" in line:
+                            try:
+                                width, height = map(int, line.split("x"))
+                            except ValueError:
+                                pass
+
+                monitor_info.append({
+                    "name": f"DRM-{entry}",
+                    "width": width, "height": height,
+                    "x": current_x, "y": 0,
+                })
+                current_x += width # Simple horizontal tiling assumption
+                
+            if monitor_info:
+                self.logger.debug(f"DRM fallback detected monitors: {monitor_info}")
         except Exception as e:
-            self.logger.error(f"xrandr fallback failed: {e}")
+            self.logger.error(f"DRM fallback failed: {e}")
 
         return monitor_info
 
-    def _get_monitor_info_main(self):
+    def _get_monitor_info_main(self) -> List[Dict[str, Any]]:
         """Internal method to get monitor info using Gdk (Must run on Main Thread)."""
-        monitor_info = []
+        monitor_info: List[Dict[str, Any]] = []
         try:
             gi.require_version("Gdk", "3.0")
             from gi.repository import Gdk
@@ -288,30 +349,30 @@ class WallpaperManager:
             return image_path
 
         try:
-            original_img = Image.open(image_path)
-            target_aspect = max_x / max_y
-            original_aspect = original_img.width / original_img.height
+            with Image.open(image_path) as original_img:
+                target_aspect = max_x / max_y
+                original_aspect = original_img.width / original_img.height
 
-            if original_aspect > target_aspect:
-                new_width = int(target_aspect * original_img.height)
-                offset = (original_img.width - new_width) // 2
-                img_cropped = original_img.crop((offset, 0, offset + new_width, original_img.height))
-            else:
-                new_height = int(original_img.width / target_aspect)
-                offset = (original_img.height - new_height) // 2
-                img_cropped = original_img.crop((0, offset, original_img.width, offset + new_height))
+                if original_aspect > target_aspect:
+                    new_width = int(target_aspect * original_img.height)
+                    offset = (original_img.width - new_width) // 2
+                    img_cropped = original_img.crop((offset, 0, offset + new_width, original_img.height))
+                else:
+                    new_height = int(original_img.width / target_aspect)
+                    offset = (original_img.height - new_height) // 2
+                    img_cropped = original_img.crop((0, offset, original_img.width, offset + new_height))
 
-            composite_img = img_cropped.resize((max_x, max_y), Image.LANCZOS)
+                composite_img = img_cropped.resize((max_x, max_y), Image.LANCZOS)
 
-            # Ensure RGB for JPEG
-            if composite_img.mode == "RGBA":
-                composite_img = composite_img.convert("RGB")
+                # Ensure RGB for JPEG
+                if composite_img.mode == "RGBA":
+                    composite_img = composite_img.convert("RGB")
 
-            temp_dir = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle", "temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            path = os.path.join(temp_dir, "composite_wallpaper.jpg")
-            composite_img.save(path)
-            return path
+                temp_dir = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle", "temp")
+                os.makedirs(temp_dir, mode=0o700, exist_ok=True)
+                path = os.path.join(temp_dir, "composite_wallpaper.jpg")
+                composite_img.save(path)
+                return path
         except Exception as e:
             self.logger.error(f"Composite image failed: {e}")
             return image_path
@@ -482,7 +543,7 @@ class WallpaperManager:
                     # Continue to next monitor, leaving black hole if failed
 
             temp_dir = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle", "temp")
-            os.makedirs(temp_dir, exist_ok=True)
+            os.makedirs(temp_dir, mode=0o700, exist_ok=True)
             path = os.path.join(temp_dir, "stitched_wallpaper.jpg")
             canvas.save(path, quality=95)
             self.logger.info(f"Created stitched wallpaper: {path} ({total_width}x{total_height}) with mode '{mode}'")
@@ -493,9 +554,9 @@ class WallpaperManager:
             return image_paths[0]
 
     def apply_desktop_settings(self, mode, image_paths=None, background_color=None):
-        """Dispatcher for different DE implementations."""
+        """Dispatcher for different DE implementations. Returns (success: bool, error_message: str)."""
         if not image_paths:
-            return False
+            return False, "No image paths provided."
 
         # Validate image paths
         valid_paths = []
@@ -506,8 +567,9 @@ class WallpaperManager:
                 self.logger.warning(f"Invalid image path ignored: {p}")
 
         if not valid_paths:
-            self.logger.error("No valid image paths provided.")
-            return False
+            error_msg = "No valid image paths provided."
+            self.logger.error(error_msg)
+            return False, error_msg
 
         if self.desktop_environment in GNOME_COMPAT:
             return self.apply_gnome_settings(mode, valid_paths, background_color)
@@ -516,8 +578,9 @@ class WallpaperManager:
         elif self.desktop_environment == "xfce":
             return self.apply_xfce_settings(mode, valid_paths, background_color)
 
-        self.logger.warning(f"DE '{self.desktop_environment}' not supported.")
-        return False
+        error_msg = f"Desktop Environment '{self.desktop_environment}' not supported."
+        self.logger.warning(error_msg)
+        return False, error_msg
 
     def _get_gnome_schema(self):
         """Returns the appropriate GSettings schema for the current DE."""
@@ -529,6 +592,25 @@ class WallpaperManager:
 
     def apply_gnome_settings(self, mode, image_paths=None, background_color=None):
         schema = self._get_gnome_schema()
+
+        # Validate schema exists before attempting to use it
+        try:
+            result = subprocess.run(
+                ["gsettings", "list-keys", schema],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode != 0:
+                error_msg = f"GSettings schema '{schema}' is not available on this system. Stderr: {result.stderr.strip()}"
+                self.logger.error(error_msg)
+                return False, error_msg
+        except FileNotFoundError:
+            error_msg = "gsettings command not found. Is GNOME/GTK installed?"
+            self.logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Failed to validate GSettings schema '{schema}': {e}"
+            self.logger.error(error_msg)
+            return False, error_msg
 
         # Determine strict mode or composite
         final_path = image_paths[0]
@@ -544,16 +626,23 @@ class WallpaperManager:
                 mode = "spanned" # Force spanned to display the stitched image correctly
 
         # Mode & Color
-        self._run_subprocess(["gsettings", "set", schema, "picture-options", mode], "set mode")
+        success, error_msg = self._run_subprocess(["gsettings", "set", schema, "picture-options", mode], "set mode")
+        if not success:
+            return False, error_msg
+
         if background_color:
-            self._run_subprocess(["gsettings", "set", schema, "color-shading-type", "solid"], "set solid shading")
-            self._run_subprocess(["gsettings", "set", schema, "primary-color", background_color], "set bg color")
+            success, error_msg = self._run_subprocess(["gsettings", "set", schema, "color-shading-type", "solid"], "set solid shading")
+            if not success:
+                return False, error_msg
+            success, error_msg = self._run_subprocess(["gsettings", "set", schema, "primary-color", background_color], "set bg color")
+            if not success:
+                return False, error_msg
 
         # Image URI
         # Copy to local cache to ensure accessibility (fixes issues with /mnt/ paths)
         try:
             cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle")
-            os.makedirs(cache_dir, exist_ok=True)
+            os.makedirs(cache_dir, mode=0o700, exist_ok=True)
 
             src = final_path
             # Use a hash of the full path + extension to ensure uniqueness
@@ -562,6 +651,23 @@ class WallpaperManager:
             filename = f"wallpaper_{path_hash}{ext}"
 
             dst = os.path.join(cache_dir, filename)
+
+            # Purge ALL old cache entries before creating the new one.
+            # This prevents unbounded accumulation of cached wallpapers.
+            try:
+                for old_entry in os.listdir(cache_dir):
+                    old_path = os.path.join(cache_dir, old_entry)
+                    # Skip the destination if it already matches (avoid removing then re-creating)
+                    if os.path.abspath(old_path) == os.path.abspath(dst):
+                        continue
+                    try:
+                        if os.path.islink(old_path) or os.path.isfile(old_path):
+                            os.remove(old_path)
+                            self.logger.debug(f"Purged old cache entry: {old_path}")
+                    except OSError as e:
+                        self.logger.warning(f"Failed to remove old cache entry {old_path}: {e}")
+            except OSError as e:
+                self.logger.warning(f"Failed to list cache directory for cleanup: {e}")
 
             # Only copy (or symlink) if source and dest are different
             if os.path.abspath(src) != os.path.abspath(dst):
@@ -586,10 +692,18 @@ class WallpaperManager:
             local_path = final_path
 
         uri = f"file://{local_path}"
-        self._run_subprocess(["gsettings", "set", schema, "picture-uri", uri], "set uri")
-        self._run_subprocess(["gsettings", "set", schema, "picture-uri-dark", uri], "set dark uri")
+        uri_ok, error_msg = self._run_subprocess(["gsettings", "set", schema, "picture-uri", uri], "set uri")
+        if not uri_ok:
+            self.logger.error(f"CRITICAL: Failed to set wallpaper URI via gsettings. Schema: {schema}. Error: {error_msg}")
+            return False, error_msg
 
-        return True
+        # Also set dark mode URI if possible (for GNOME 42+)
+        if schema == "org.gnome.desktop.background":
+             dark_ok, dark_error_msg = self._run_subprocess(["gsettings", "set", schema, "picture-uri-dark", uri], "set dark uri")
+             if not dark_ok:
+                 self.logger.warning(f"Failed to set dark-mode URI (non-fatal). Error: {dark_error_msg}")
+
+        return True, ""
 
     def _generate_kde_script(self, image_paths, mode):
         """Generates the JavaScript payload for KDE Plasma."""
@@ -600,41 +714,43 @@ class WallpaperManager:
             image_paths = [image_paths]
 
         # Prepare js array of paths
-        # safe_paths = [json.dumps(f"file://{p}") for p in image_paths]
-        # But we want to assign them sequentially to desktops.
-
-        # We can embed the paths array in JS and pick by index.
         js_paths_array = "[" + ", ".join([json.dumps(f"file://{p}") for p in image_paths]) + "]"
 
+        # Defensive script for Plasma (compatible with 5 and 6)
         return f"""
             var allDesktops = desktops();
             var images = {js_paths_array};
-            for (var i=0; i<allDesktops.length; i++) {{
-                var d = allDesktops[i];
-                d.wallpaperPlugin = 'org.kde.image';
-                d.currentConfigGroup = Array('Wallpaper', 'org.kde.image', 'General');
+            if (typeof allDesktops !== 'undefined' && allDesktops) {{
+                for (var i = 0; i < allDesktops.length; i++) {{
+                    var d = allDesktops[i];
+                    if (!d) continue;
+                    
+                    d.wallpaperPlugin = "org.kde.image";
+                    d.currentConfigGroup = Array("Wallpaper", "org.kde.image", "General");
 
-                // Select image based on desktop index (cycle if fewer images)
-                var img = images[i % images.length];
-
-                d.writeConfig('Image', img);
-                d.writeConfig('FillMode', {fill_mode});
+                    var img = images[i % images.length];
+                    if (img) {{
+                        d.writeConfig("Image", img);
+                        d.writeConfig("FillMode", {fill_mode});
+                    }}
+                }}
             }}
         """
 
     def apply_kde_settings(self, mode, image_paths=None, background_color=None):
         if not image_paths:
-            return True
+            return True, "" # No images to set, consider it a success
 
         script = self._generate_kde_script(image_paths, mode)
-        return self._run_subprocess([
+        success, error_msg = self._run_subprocess([
             "dbus-send", "--session", "--dest=org.kde.plasmashell", "--type=method_call",
             "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", f"string:{script}"
         ], "kde script")
+        return success, error_msg
 
     def apply_xfce_settings(self, mode, image_paths=None, background_color=None):
         if not image_paths:
-            return True
+            return True, ""
 
         style = self.XFCE_STYLES.get(mode, "5") # Default to Zoomed
 
@@ -647,8 +763,9 @@ class WallpaperManager:
                 timeout=5
             )
             if props_result.returncode != 0:
-                self.logger.warning(f"xfconf-query list failed: {props_result.stderr}")
-                return False
+                error_msg = f"xfconf-query list failed: {props_result.stderr.strip()}"
+                self.logger.warning(error_msg)
+                return False, error_msg
 
             props = props_result.stdout.splitlines()
 
@@ -663,15 +780,25 @@ class WallpaperManager:
 
             for i, prop in enumerate(image_props):
                 img_path = image_paths[i % len(image_paths)]
-                self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", img_path], f"xfce image {i}")
+                success, error_msg = self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", img_path], f"xfce image {i}")
+                if not success:
+                    return False, error_msg
 
             for prop in style_props:
-                 self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", style], "xfce style")
+                 success, error_msg = self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", style], "xfce style")
+                 if not success:
+                     return False, error_msg
 
-            return True
+            return True, ""
         except subprocess.TimeoutExpired:
-            self.logger.error("XFCE settings failed: Timeout querying xfconf")
-            return False
+            error_msg = "XFCE settings failed: Timeout querying xfconf"
+            self.logger.error(error_msg)
+            return False, error_msg
+        except FileNotFoundError:
+            error_msg = "xfconf-query command not found. Is XFCE installed?"
+            self.logger.error(error_msg)
+            return False, error_msg
         except Exception as e:
-            self.logger.error(f"XFCE settings failed: {e}")
-            return False
+            error_msg = f"XFCE settings failed: {e}"
+            self.logger.error(error_msg)
+            return False, error_msg

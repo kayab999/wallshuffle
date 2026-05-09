@@ -25,6 +25,19 @@
     </screenshot>
   </screenshots>
   <url type="homepage">https://carlos.github.io/wallshuffle/</url>
+  <releases>
+    <release version="1.0.0" date="2026-04-14">
+      <description>
+        <p>Official Gold Master release.</p>
+        <ul>
+          <li>Critical fix for Wayland segmentation faults</li>
+          <li>Resolved tray icon persistence issues on Save</li>
+          <li>Hardened process management and locking mechanism</li>
+          <li>Improved systemd integration and error reporting</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
   <provides>
     <binary>wallshuffle</binary>
   </provides>

@@ -12,26 +12,25 @@ def apply_image_effect(image_path, effect_type):
         return image_path
 
     try:
-        img = Image.open(image_path)
-        if effect_type == "Grayscale":
-            img = img.convert("L")
-        elif effect_type == "Blur":
-            img = img.filter(ImageFilter.GaussianBlur(radius=5))
-        elif effect_type == "Sepia":
-            # Fix Sepia implementation: convert to grayscale then colorize
-            img = img.convert("L")
-            img = ImageOps.colorize(img, black="#704214", white="#C0A080")
+        with Image.open(image_path) as img:
+            if effect_type == "Grayscale":
+                img = img.convert("L")
+            elif effect_type == "Blur":
+                img = img.filter(ImageFilter.GaussianBlur(radius=5))
+            elif effect_type == "Sepia":
+                # Fix Sepia implementation: convert to grayscale then colorize
+                img = img.convert("L")
+                img = ImageOps.colorize(img, black="#704214", white="#C0A080")
 
-        # Ensure RGB mode for JPEG saving
-        if img.mode in ("RGBA", "LA", "P"):
-            img = img.convert("RGB")
+            # Ensure RGB mode for JPEG saving
+            if img.mode in ("RGBA", "LA", "P"):
+                img = img.convert("RGB")
 
-        temp_dir = os.path.join(CONFIG_DIR, "temp")
-        os.makedirs(temp_dir, exist_ok=True)
-        processed_image_path = os.path.join(temp_dir, f"processed_wallpaper_{effect_type.lower()}.jpg")
-        img.save(processed_image_path)
-        img.close()
-        return processed_image_path
+            temp_dir = os.path.join(CONFIG_DIR, "temp")
+            os.makedirs(temp_dir, mode=0o700, exist_ok=True)
+            processed_image_path = os.path.join(temp_dir, f"processed_wallpaper_{effect_type.lower()}.jpg")
+            img.save(processed_image_path)
+            return processed_image_path
     except FileNotFoundError:
         logging.error(f"Image file not found for applying effect: {image_path}")
         show_error_dialog(f"Image file not found: {image_path}. Cannot apply effect.")

@@ -5,15 +5,14 @@ import logging
 import os
 import shutil
 import time
+from typing import Optional, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .utils import CONFIG_DIR
-
-CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
-CACHE_EXPIRATION_HOURS = 24
+from .constants import CACHE_EXPIRATION_HOURS
+from .utils import CACHE_DIR, CONFIG_DIR
 
 class UnsplashConfigError(Exception):
     """Exception raised when Unsplash API is not properly configured."""
@@ -24,13 +23,18 @@ class OnlineSourceManager:
     # Circuit Breaker state (static across instances during app life)
     _consecutive_failures = 0
     _last_failure_time = None
-    _COOLDOWN_MINUTES = 15
-    _MAX_FAILURES = 3
 
     def __init__(self, config_manager, config):
         self.config_manager = config_manager
         self.config = config
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        
+        # Thresholds configurables (Fase 2 Hardening)
+        self.max_failures = config_manager.get_setting(config, "Settings", "circuit_breaker_failures", 3, int)
+        self.cooldown_minutes = config_manager.get_setting(config, "Settings", "circuit_breaker_cooldown", 15, int)
+        self.max_cache_size_mb = config_manager.get_setting(config, "Settings", "max_cache_size_mb", 500, int)
+
+        # Ensure restricted permissions on cache directory
+        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
         self.session = self._create_resilient_session()
 
     def _create_resilient_session(self):
@@ -49,11 +53,11 @@ class OnlineSourceManager:
 
     def _check_circuit_breaker(self):
         """Check if we are in a cooldown period."""
-        if OnlineSourceManager._consecutive_failures >= OnlineSourceManager._MAX_FAILURES:
+        if OnlineSourceManager._consecutive_failures >= self.max_failures:
             if OnlineSourceManager._last_failure_time:
                 elapsed = datetime.datetime.now() - OnlineSourceManager._last_failure_time
-                if elapsed < datetime.timedelta(minutes=OnlineSourceManager._COOLDOWN_MINUTES):
-                    remaining = OnlineSourceManager._COOLDOWN_MINUTES - (elapsed.total_seconds() / 60)
+                if elapsed < datetime.timedelta(minutes=self.cooldown_minutes):
+                    remaining = self.cooldown_minutes - (elapsed.total_seconds() / 60)
                     logging.warning(f"Unsplash source is in cooldown. {remaining:.1f}m remaining.")
                     return False
                 else:
@@ -64,8 +68,8 @@ class OnlineSourceManager:
     def _record_failure(self):
         OnlineSourceManager._consecutive_failures += 1
         OnlineSourceManager._last_failure_time = datetime.datetime.now()
-        if OnlineSourceManager._consecutive_failures >= OnlineSourceManager._MAX_FAILURES:
-            logging.error(f"Unsplash source entered cooldown after {OnlineSourceManager._MAX_FAILURES} failures.")
+        if OnlineSourceManager._consecutive_failures >= self.max_failures:
+            logging.error(f"Unsplash source entered cooldown after {self.max_failures} failures.")
 
     def _record_success(self):
         OnlineSourceManager._consecutive_failures = 0
@@ -103,7 +107,6 @@ class OnlineSourceManager:
 
     def _save_image_to_cache(self, image_data, keywords):
         """Saves downloaded image data to cache directory."""
-        # Legacy method kept if needed, but we prefer file copy
         filename = self._get_cache_key(keywords)
         cache_path = os.path.join(CACHE_DIR, filename)
         try:
@@ -121,22 +124,20 @@ class OnlineSourceManager:
         except IOError as e:
             logging.error(f"Failed to copy image to cache: {e}")
 
-    def fetch_unsplash_wallpaper(self, keywords, index=0):
+    def fetch_unsplash_wallpaper(self, keywords, index=0) -> Tuple[Optional[str], str]:
         # First, try to get from cache
-        # We only cache based on keywords, so index doesn't affect cache lookup
-        # unless we want different images for different monitors to be cached separately.
-        # For now, let's keep it simple: cache is a single 'daily' image for keywords.
         cached_image_path = self._get_cached_image(keywords)
         if cached_image_path:
-            return cached_image_path
+            return cached_image_path, ""
 
         if not self._check_circuit_breaker():
-            return None
+            return None, f"Unsplash source is in cooldown. Try again in {self.cooldown_minutes} minutes."
 
         unsplash_api_key = self.config_manager.get_setting(self.config, "Settings", "unsplash_api_key", "YOUR_UNSPLASH_API_KEY")
-        if unsplash_api_key == "YOUR_UNSPLASH_API_KEY":
-            logging.error("Unsplash API key is not configured.")
-            raise UnsplashConfigError("Unsplash API key is not configured. Please set it in the settings.")
+        if not unsplash_api_key or unsplash_api_key == "YOUR_UNSPLASH_API_KEY":
+            error_msg = "Unsplash API key is not configured. Please set it in the settings."
+            logging.error(error_msg)
+            return None, error_msg
         url = f"https://api.unsplash.com/photos/random?query={keywords}&client_id={unsplash_api_key}"
         try:
             # Use self.session instead of requests directly
@@ -150,9 +151,7 @@ class OnlineSourceManager:
             image_response.raise_for_status()
 
             temp_dir = os.path.join(CONFIG_DIR, "temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            # Use index in filename to avoid overwrites during multi-monitor fetches
-            # Use secure temp file creation
+            os.makedirs(temp_dir, mode=0o700, exist_ok=True)
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir) as f:
                 for chunk in image_response.iter_content(chunk_size=8192):
@@ -161,40 +160,57 @@ class OnlineSourceManager:
 
             # Read back for cache
             self._save_image_file_to_cache(image_path, keywords)
+            
+            # Ejecutar limpieza proactiva de caché (Fase 2)
+            OnlineSourceManager.cleanup_old_cache(max_size_mb=self.max_cache_size_mb)
 
             self._record_success()
-            return image_path
-        except requests.exceptions.RetryError:
-            logging.error(f"Max retries exceeded fetching from Unsplash for keywords: {keywords}")
+            return image_path, ""
+        except requests.exceptions.RetryError as e:
+            error_msg = f"Max retries exceeded fetching from Unsplash for keywords: {keywords}. Error: {e}"
+            logging.error(error_msg)
             self._record_failure()
-            return None
-        except requests.exceptions.Timeout:
-            logging.error(f"Timeout fetching from Unsplash for keywords: {keywords}")
+            return None, error_msg
+        except requests.exceptions.Timeout as e:
+            error_msg = f"Timeout fetching from Unsplash for keywords: {keywords}. Error: {e}"
+            logging.error(error_msg)
             self._record_failure()
-            return None
-        except requests.exceptions.ConnectionError:
-            logging.error(f"Connection error fetching from Unsplash for keywords: {keywords}")
+            return None, error_msg
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"Connection error fetching from Unsplash for keywords: {keywords}. Error: {e}"
+            logging.error(error_msg)
             self._record_failure()
-            return None
+            return None, error_msg
         except requests.exceptions.HTTPError as e:
-            logging.error(f"HTTP error fetching from Unsplash for keywords: {keywords} - {e}")
+            status_code = e.response.status_code if e.response is not None else "Unknown"
+            error_msg = f"HTTP error fetching from Unsplash for keywords: {keywords} - {e}. Status Code: {status_code}"
+            logging.error(error_msg)
             self._record_failure()
-            return None
+            return None, error_msg
+        except requests.exceptions.SSLError as e:
+            error_msg = f"SSL/Certificate error fetching from Unsplash (possible local system issue): {e}"
+            logging.error(error_msg)
+            return None, error_msg
         except requests.exceptions.RequestException as e:
-            logging.error(f"General request error fetching from Unsplash for keywords: {keywords} - {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Invalid JSON response from Unsplash for keywords: {keywords}")
-            return None
-        except KeyError:
-            logging.error(f"Missing data in Unsplash response for keywords: {keywords}")
-            return None
+            error_msg = f"General network request failure for keywords '{keywords}': {e}"
+            logging.error(error_msg)
+            return None, error_msg
+        except json.JSONDecodeError as e:
+            error_msg = f"Invalid JSON response from Unsplash for keywords: {keywords}. Error: {e}"
+            logging.error(error_msg)
+            return None, error_msg
+        except KeyError as e:
+            error_msg = f"Missing data in Unsplash response for keywords: {keywords}. Error: {e}"
+            logging.error(error_msg)
+            return None, error_msg
         except IOError as e:
-            logging.error(f"File I/O error while saving Unsplash image: {e}")
-            return None
+            error_msg = f"File I/O error while saving Unsplash image: {e}"
+            logging.error(error_msg)
+            return None, error_msg
         except Exception as e:
-            logging.critical(f"An unhandled error occurred in fetch_unsplash_wallpaper: {e}", exc_info=True)
-            return None
+            error_msg = f"An unhandled error occurred in fetch_unsplash_wallpaper: {e}"
+            logging.critical(error_msg, exc_info=True)
+            return None, error_msg
 
     def test_api_connection(self, api_key):
         """
@@ -238,28 +254,73 @@ class OnlineSourceManager:
         return None
 
     @staticmethod
-    def cleanup_old_cache():
-        """Removes all cache files older than CACHE_EXPIRATION_HOURS."""
+    def cleanup_old_cache(max_size_mb: Optional[int] = None):
+        """
+        Removes cache files based on age and total directory size (LRU).
+        """
         if not os.path.exists(CACHE_DIR):
             return
 
         now = time.time()
         expiration_seconds = CACHE_EXPIRATION_HOURS * 3600
 
-        logging.info("Starting cache cleanup...")
-        removed_count = 0
+        logging.debug("Starting cache maintenance...")
+        
+        files_data = []
         try:
             for f in os.listdir(CACHE_DIR):
                 path = os.path.join(CACHE_DIR, f)
                 if os.path.isfile(path):
                     try:
-                        file_time = os.path.getmtime(path)
-                        if (now - file_time) > expiration_seconds:
-                            os.remove(path)
-                            removed_count += 1
+                        stat = os.stat(path)
+                        files_data.append({
+                            "path": path,
+                            "size": stat.st_size,
+                            "mtime": stat.st_mtime
+                        })
                     except OSError:
-                        pass
+                        continue
+
+            # 1. Primero eliminar archivos expirados (por tiempo)
+            removed_count = 0
+            remaining_files = []
+            for item in files_data:
+                if (now - item["mtime"]) > expiration_seconds:
+                    try:
+                        os.remove(item["path"])
+                        removed_count += 1
+                    except OSError:
+                        remaining_files.append(item)
+                else:
+                    remaining_files.append(item)
+            
             if removed_count > 0:
-                logging.info(f"Cleanup complete. Removed {removed_count} expired cache files.")
+                logging.info(f"Cache cleanup (expiration): Removed {removed_count} files.")
+
+            # 2. Si se especifica max_size_mb, aplicar política LRU (por tamaño)
+            if max_size_mb is not None:
+                max_bytes = max_size_mb * 1024 * 1024
+                current_bytes = sum(f["size"] for f in remaining_files)
+                
+                if current_bytes > max_bytes:
+                    # Ordenar por mtime (más antiguo primero para LRU)
+                    remaining_files.sort(key=lambda x: x["mtime"])
+                    
+                    purged_size = 0
+                    purged_count = 0
+                    for item in remaining_files:
+                        if current_bytes <= max_bytes:
+                            break
+                        try:
+                            os.remove(item["path"])
+                            current_bytes -= item["size"]
+                            purged_size += item["size"]
+                            purged_count += 1
+                        except OSError:
+                            pass
+                    
+                    if purged_count > 0:
+                        logging.info(f"Cache cleanup (LRU): Purged {purged_count} files ({purged_size / (1024*1024):.1f} MB) to stay under {max_size_mb} MB.")
+
         except Exception as e:
             logging.error(f"Error during cache cleanup: {e}")

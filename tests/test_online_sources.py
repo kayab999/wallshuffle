@@ -11,8 +11,13 @@ class TestOnlineSourcesResilience(unittest.TestCase):
     def setUp(self):
         # Mock ConfigManager
         self.mock_config_manager = MagicMock()
-        self.mock_config = {"Settings": {"unsplash_api_key": "valid_key"}}
-        self.mock_config_manager.get_setting.return_value = "valid_key"
+        self.mock_config = {"Settings": {"unsplash_api_key": "valid_key", "circuit_breaker_failures": 3}}
+        self.mock_config_manager.get_setting.side_effect = lambda config, section, option, fallback, vtype=None: {
+            "unsplash_api_key": "valid_key",
+            "circuit_breaker_failures": 3,
+            "circuit_breaker_cooldown": 15,
+            "max_cache_size_mb": 500
+        }.get(option, fallback)
 
         self.manager = OnlineSourceManager(self.mock_config_manager, self.mock_config)
 
@@ -55,7 +60,7 @@ class TestOnlineSourcesResilience(unittest.TestCase):
 
         self.manager.session.get.return_value = mock_response
 
-        result = self.manager.fetch_unsplash_wallpaper("test")
+        result, error_msg = self.manager.fetch_unsplash_wallpaper("test")
 
         self.assertIsNone(result)
         # Should only be called once (no retries for auth errors handled by library,

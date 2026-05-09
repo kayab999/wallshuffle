@@ -27,11 +27,11 @@ class ThemeManager:
         else:
             # If no theme is saved (first run) or saved theme is invalid, detect distro
             distro_id, distro_like = self.detect_distro()
-            
+
             # Smart mapping logic
             theme_key = "Default"
             possible_ids = [distro_id, distro_like] if distro_like else [distro_id]
-            
+
             for d_id in filter(None, possible_ids):
                 d_id = d_id.lower()
                 # Direct match or alias
@@ -39,7 +39,7 @@ class ThemeManager:
                 if found_key:
                     theme_key = found_key
                     break
-            
+
             self.current_theme_name = theme_key
             logging.info(f"Auto-detected theme: {self.current_theme_name} (ID: {distro_id}, LIKE: {distro_like})")
             # Save the auto-detected theme so it persists

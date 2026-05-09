@@ -6,6 +6,7 @@ import subprocess
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.ini")
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle")
 
 
 

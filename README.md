@@ -61,7 +61,7 @@ For Debian, Ubuntu, Linux Mint, and derivatives:
 
 ### Method 3: From Source (Developers)
 ```bash
-git clone https://github.com/carlos/wallshuffle.git
+git clone https://github.com/kayabsoftware/wallshuffle.git
 cd wallshuffle
 ./install.sh
 ```
@@ -101,6 +101,18 @@ When you launch the application, you will be presented with the following option
 
 Click **Save** to apply your settings and start the timer. The main window will hide, but the application will continue running in the background if an interval is set.
 
+## 🚀 v1.0.0 Gold Master (Hardening Release)
+
+The following critical features and deep security/stability fixes define the 'Gold Master' iteration of WallShuffle:
+
+- **Bulletproof Concurrency:** Implemented non-blocking `fcntl.flock` with timeouts to strictly serialize `change_wallpaper` requests. The system gracefully handles simultaneous calls from systemd timers and user GUI interactions without thread exhaustion or race conditions.
+- **Smart LRU Cache Management:** Added an intelligent caching policy for online sources (default 500MB limit). It proactively purges the oldest images using a Least Recently Used (LRU) algorithm, keeping your disk space clean out-of-the-box.
+- **Dynamic Systemd Integration:** Replaced static environment variable capture with dynamic specifiers (`%U`, `%t`) and live session imports. The background service now survives session changes and dbus restarts flawlessly.
+- **Strict Security & Privacy (0o700):** Hardened directory creation permissions. All config, cache, and log folders are now created with `0o700` mode. Command injection risks via cron have been neutralized using `shlex.quote`.
+- **Network Resilience:** Added a configurable Circuit Breaker for online sources (retries and timeouts) to prevent thread locking on unstable connections.
+- **Clean Environment Separation:** Removed all hardcoded API keys. Users must supply their own Unsplash API Key via `config.ini`, ensuring a truly clean, sovereign installation.
+- **Wayland Native Stability:** Fixed critical library collisions causing segmentation faults on Ubuntu 22.04+ by intelligently forcing the X11 backend (XWayland) when necessary.
+
 ## ⌨ Keyboard Shortcut
 
 Wallshuffle supports manual wallpaper change via the command line. You can use the AppImage directly to trigger a change.
@@ -124,7 +136,7 @@ If you prefer to build the AppImage yourself:
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your_username/wallshuffle.git
+    git clone https://github.com/kayabsoftware/wallshuffle.git
     cd wallshuffle
     ```
 2.  **Set up the environment:**
@@ -149,9 +161,8 @@ If you prefer to build the AppImage yourself:
 
 ## ☕ Support Development
 
-If WallShuffle makes your desktop better, consider supporting the developer:
+- **Buy Me A Coffee:** [https://buymeacoffee.com/kayabsoftware](https://buymeacoffee.com/kayabsoftware)
 - **Ko-fi:** `https://ko-fi.com/nysekf`
-- **GitHub Sponsors:** Look for the "Sponsor" button on my profile.
 
 ## Uninstall
 

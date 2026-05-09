@@ -26,15 +26,7 @@ def configure_backend():
 # Call this BEFORE importing any GTK/GDK modules
 configure_backend()
 
-try:
-    from .app import WallpaperApp
-    from .core import WallpaperUpdateResult, change_wallpaper
-except ImportError as e:
-    logging.critical(f"Failed to import application modules: {e}", exc_info=True)
-    sys.exit(1)
-except Exception as e:
-    logging.critical(f"Unexpected error during imports: {e}", exc_info=True)
-    sys.exit(1)
+
 
 from . import __version__
 
@@ -46,7 +38,7 @@ def setup_logging():
         log_dir = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle", "logs")
 
         # Create directory if it doesn't exist
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
 
         log_file_path = os.path.join(log_dir, "wallshuffle.log")
 
@@ -109,20 +101,66 @@ def main():
                      f"XDG={os.environ.get('XDG_CURRENT_DESKTOP')}"
                  )
 
+            try:
+                from .core import WallpaperUpdateResult, change_wallpaper
+            except ImportError as e:
+                logging.critical(f"Failed to import core modules: {e}", exc_info=True)
+                sys.exit(1)
+
             result = change_wallpaper()
 
             # Flush logs to ensure they are written immediately
             for handler in logging.getLogger().handlers:
                 handler.flush()
 
-            if result != WallpaperUpdateResult.SUCCESS:
-                logging.error(f"CLI wallpaper change failed with status: {result.name}")
+            if result[0] != WallpaperUpdateResult.SUCCESS:
+                logging.error(f"CLI wallpaper change failed with status: {result[0].name}")
                 sys.exit(1)
             else:
                 logging.info("CLI wallpaper change finished successfully.")
                 sys.exit(0)
 
         else:
+            # Preliminary check for a valid graphical environment
+            display = os.environ.get("DISPLAY")
+            dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+            
+            if not display:
+                 logging.error("DISPLAY environment variable is not set. GUI cannot start.")
+                 print("ERROR: DISPLAY is not set. Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
+                 sys.exit(1)
+            try:
+                # Check if we can actually open the display
+                # This will raise an exception if the display is not available or invalid
+                import gi
+                gi.require_version("Gtk", "3.0")
+                from gi.repository import Gtk
+                
+                # Check if we can actually open the display
+                if not Gtk.init_check()[0]:
+                     raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
+                
+                logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}).")
+            except Exception as e:
+                logging.error(
+                    f"Failed to connect to graphical display (GTK initialization failed: {e}). "
+                    f"Context: DISPLAY={display}, DBUS={dbus}. "
+                    "Use 'wallshuffle --change' for headless wallpaper changes."
+                )
+                print(
+                    f"ERROR: Failed to connect to graphical display ({e}).\n"
+                    "Tip: Ensure your DISPLAY environment variable is set correctly, "
+                    "or use 'wallshuffle --change' to change wallpaper without a GUI.",
+                    file=sys.stderr
+                )
+                sys.exit(1)
+
+            try:
+                from .app import WallpaperApp
+            except ImportError as e:
+                logging.critical(f"Failed to import GUI modules: {e}", exc_info=True)
+                sys.exit(1)
+
             app = WallpaperApp()
             exit_code = app.run(sys.argv)
             logging.shutdown()

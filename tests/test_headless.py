@@ -1,7 +1,9 @@
 import os
 import unittest
-from unittest.mock import patch, MagicMock
-from wallshuffle.core import change_wallpaper, WallpaperUpdateResult
+from unittest.mock import MagicMock, patch
+
+from wallshuffle.core import WallpaperUpdateResult, change_wallpaper
+
 
 class TestHeadlessMode(unittest.TestCase):
     """Tests the application behavior in headless environments."""
@@ -20,7 +22,7 @@ class TestHeadlessMode(unittest.TestCase):
             "WAYLAND_DISPLAY": "",
             "XDG_CURRENT_DESKTOP": "gnome"
         }
-        
+
         # 2. Mock configuration (Local Folder with one image)
         mock_config = MagicMock()
         settings_data = {
@@ -36,7 +38,7 @@ class TestHeadlessMode(unittest.TestCase):
         mock_config.get.side_effect = lambda section, option, **kwargs: settings_data.get(option)
         mock_config.getboolean.side_effect = lambda section, option: settings_data.get(option, False)
         mock_load_settings.return_value = mock_config
-        
+
         # 3. Mock file system
         def side_effect_isfile(path):
             return path.endswith(".jpg")
@@ -50,25 +52,25 @@ class TestHeadlessMode(unittest.TestCase):
              patch("os.listdir", return_value=["img1.jpg"]), \
              patch("os.path.isfile", side_effect=side_effect_isfile), \
              patch("os.path.getsize", return_value=1024):
-            
+
             # 4. Mock tool availability (xrandr found, gsettings found)
             def side_effect_which(tool):
                 if tool in ["xrandr", "gsettings"]:
                     return f"/usr/bin/{tool}"
                 return None
             mock_which.side_effect = side_effect_which
-            
+
             # 5. Mock subprocess for xrandr query and gsettings set
             mock_run.return_value = MagicMock(returncode=0, stdout="connected 1920x1080+0+0")
-            
+
             # 6. Execute
             with patch.dict(os.environ, env_patch, clear=False):
                 # Ensure no Gdk is imported/used or it's isolated
-                result = change_wallpaper()
-                
+                result, error_msg = change_wallpaper()
+
             # 7. Verify
             self.assertEqual(result, WallpaperUpdateResult.SUCCESS)
-            
+
             # Check if gsettings was called (standard GNOME behavior)
             # Find the call that sets the uri
             gsettings_calls = [call for call in mock_run.call_args_list if "gsettings" in call.args[0]]

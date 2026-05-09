@@ -7,6 +7,7 @@ import socket
 import sys
 import threading
 import time
+from typing import Any, Optional
 
 import gi
 
@@ -24,17 +25,19 @@ gi.require_version("Gtk", "3.0")
 
 # Flag to track if tray icon support is available
 TRAY_SUPPORTED = False
-AppIndicator3 = None
+AppIndicator3_module = None  # Use a different name to avoid redefinition
 
 try:
     try:
         gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator3_module
+
         TRAY_SUPPORTED = True
     except (ValueError, ImportError):
         try:
             gi.require_version("AppIndicator3", "0.1")
-            from gi.repository import AppIndicator3
+            from gi.repository import AppIndicator3 as AppIndicator3_module
+
             TRAY_SUPPORTED = True
         except (ValueError, ImportError):
             logging.warning("Neither AyatanaAppIndicator3 nor AppIndicator3 found. Tray icon will be disabled.")
@@ -45,35 +48,42 @@ from gi.repository import Gio, GLib, Gtk
 
 
 class WallpaperApp(Gtk.Application):
-    def __init__(self, *args: any, **kwargs: any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(
             *args,
-            application_id="com.wallshuffle.app",
+            application_id="com.carlos.WallShuffle",
             flags=Gio.ApplicationFlags.HANDLES_OPEN,
             **kwargs,
         )
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.win = None
-        self.status_icon = None
-        self.tray_available = False # Will be set to True on success
+        self.win: Optional[WallpaperAppWindow] = None
+        self.status_icon: Any = None  # AppIndicator3.Indicator type
+        self.tray_available = False  # Will be set to True on success
         self.paused = False
-        self.css_provider = None
-        self.server_socket = None
+        self.css_provider: Any = None  # Gtk.CssProvider type
+        self.server_socket: Optional[socket.socket] = None
         # Include UID in socket name to support multi-user environments
         self.socket_name = f"\0wallshuffle_{os.getuid()}_lock"
 
-        # Register cleanup handlers
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGHUP, self._signal_handler)
+        # Register cleanup handlers safely integrated with GLib main loop
+        # This prevents GTK from hiding SystemExit exceptions and hanging on session logout
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._glib_signal_handler, signal.SIGTERM)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)
 
         self.logger.debug("Initializing ThemeManager in WallpaperApp.__init__")
         self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
+        
+        # Enforce application hold to prevent premature exit when window is hidden
+        # This is a safety measure in addition to the hold() in do_startup()
+        self.hold()
+        self.logger.debug("Application held in __init__ (Safety Hold)")
 
-        # Schedule cache cleanup
-        threading.Thread(target=OnlineSourceManager.cleanup_old_cache, daemon=True).start()
+        # Schedule cache cleanup with configured limits
+        max_cache_mb = self.config_manager.get_setting(self.config, "Settings", "max_cache_size_mb", 500, int)
+        threading.Thread(target=OnlineSourceManager.cleanup_old_cache, args=(max_cache_mb,), daemon=True).start()
 
         # Perform environment checks immediately in __init__
         # This prevents race conditions where the window is created (using defaults)
@@ -95,98 +105,174 @@ class WallpaperApp(Gtk.Application):
         self.logger.info(f"DE Supported: {self.is_de_supported}")
         self.logger.info(f"Systemd Available: {self.is_systemd_available}")
 
-        self.theme_manager = ThemeManager(self.config_manager, self.config)
-        self.logger.debug("ThemeManager initialized")
+        try:
+            self.theme_manager: Optional[ThemeManager] = ThemeManager(self.config_manager, self.config)
+            self.logger.debug("ThemeManager initialized")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize ThemeManager: {e}", exc_info=True)
+            self.theme_manager = None
 
         # Sync local state with systemd timer
         if self.is_systemd_available:
             is_active = self.wallpaper_manager.check_timer_active()
             self.paused = not is_active
             self.logger.info(f"Systemd timer active: {is_active}. Setting paused state to: {self.paused}")
+
+            # Start polling for external state changes
+            GLib.timeout_add_seconds(30, self._poll_systemd_timer_state_tray)
         else:
             self.paused = True
 
-    def _clean_temp_dir(self) -> None:
-        """Cleans up temporary files from previous sessions."""
+    def _poll_systemd_timer_state_tray(self):
+        if not self.is_systemd_available:
+            return False
+
+        def _check():
+            is_active = self.wallpaper_manager.check_timer_active()
+            GLib.idle_add(self._update_paused_state, is_active)
+
+        threading.Thread(target=_check, daemon=True).start()
+        return True
+
+    def _update_paused_state(self, is_active):
+        new_paused = not is_active
+        if self.paused != new_paused:
+            self.paused = new_paused
+            self.logger.info(f"Systemd timer state changed externally. Paused: {self.paused}")
+
+            if hasattr(self, "menu_item_pause") and self.menu_item_pause:
+                self.menu_item_pause.set_label("Resume" if self.paused else "Pause")
+
+            if self.win:
+                self.win.poll_timer_status()
+
+    def _clean_temp_dir(self):
+        """Ensures the temp directory is empty at startup, respecting locks."""
+        temp_dir = os.path.join(CONFIG_DIR, "temp")
+        lock_path = os.path.join(CONFIG_DIR, "change_wallpaper.lock")
+        
         try:
-            temp_dir = os.path.join(CONFIG_DIR, "temp")
-            if os.path.exists(temp_dir):
-                self.logger.info(f"Cleaning temp directory: {temp_dir}")
-                shutil.rmtree(temp_dir)
-                os.makedirs(temp_dir, exist_ok=True)
+            # Try to acquire the lock. If busy, another instance (timer or CLI) 
+            # is using the temp directory. We skip cleaning in that case.
+            lock_file = open(lock_path, "w")
+            try:
+                # Use LOCK_NB to avoid hanging the GUI startup
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                
+                if os.path.exists(temp_dir):
+                    self.logger.info(f"Cleaning temp directory: {temp_dir}")
+                    shutil.rmtree(temp_dir)
+                os.makedirs(temp_dir, mode=0o700, exist_ok=True)
+                
+            except (IOError, BlockingIOError):
+                self.logger.info("Skip temp cleanup: Another process is currently changing wallpaper.")
+            finally:
+                lock_file.close() # Flock is released when file is closed
         except Exception as e:
             self.logger.warning(f"Failed to clean temp directory: {e}")
 
-    def _signal_handler(self, signum: int, frame: any) -> None:
-        """Handle termination signals gracefully."""
-        # Use low-level write to avoid re-entrant logging issues in signal handlers
-        msg = f"Received signal {signum}, cleaning up...\n"
-        os.write(sys.stderr.fileno(), msg.encode())
+    def _glib_signal_handler(self, signum: int) -> bool:
+        """Handle termination signals gracefully from within the GLib main loop."""
+        self.logger.warning(f"Received termination signal {signum}. Shutting down gracefully.")
 
         if self.server_socket:
             try:
                 self.server_socket.close()
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.error(f"Error closing single-instance socket: {e}")
 
-        # Handle different signals appropriately
-        if signum == signal.SIGTERM:
-            GLib.idle_add(self.quit)
-        elif signum == signal.SIGINT:
-            sys.exit(0)
-        elif signum == signal.SIGHUP:
-            GLib.idle_add(self.quit)
+        # Schedule orderly shutdown via Gtk.Application.quit()
+        GLib.idle_add(self.quit)
+        return False
 
     def _init_single_instance(self):
         """
         Initialize single instance mechanism using Abstract Unix Domain Socket.
         Returns True if we are the primary instance.
-        Returns False if another instance is running (and we notified it).
+        If another instance is running, tells it to QUIT and retries once.
         """
-        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            # Bind to abstract namespace (starts with null byte)
-            # This is automatically cleaned up by kernel when process dies
-            self.server_socket.bind(self.socket_name)
-            self.server_socket.listen(1)
-            self.logger.info("Socket bound successfully. We are the primary instance.")
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                # Bind to abstract namespace (starts with null byte)
+                # This is automatically cleaned up by kernel when process dies
+                self.server_socket.bind(self.socket_name)
+                self.server_socket.listen(1)
+                self.logger.info(f"Socket bound successfully (attempt {attempt + 1}). We are the primary instance.")
 
-            # Start listener thread
-            thread = threading.Thread(target=self._socket_listener, daemon=True)
-            thread.start()
-            return True
-        except OSError as e:  # socket.error is alias for OSError
-            if e.errno == errno.EADDRINUSE:
-                self.logger.info("Another instance is running. Attempting to wake it up.")
-                try:
-                    client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    client_socket.settimeout(2.0)  # Don't block forever if primary is hung
-                    client_socket.connect(self.socket_name)
-                    client_socket.sendall(b"WAKEUP")
-                    client_socket.close()
-                    self.logger.info("Sent WAKEUP signal to primary instance.")
-                except Exception as e2:
-                    self.logger.error(f"Failed to communicate with primary instance: {e2}")
-                return False
-            else:
-                self.logger.error(f"Unexpected socket error: {e}")
-                return False
+                # Start listener thread
+                thread = threading.Thread(target=self._socket_listener, daemon=True)
+                thread.start()
+                return True
+            except OSError as e:
+                if e.errno == errno.EADDRINUSE:
+                    if attempt == 0:
+                        self.logger.info("Another instance is running. Activating it.")
+                        try:
+                            # Try to see if it responds to STATUS
+                            client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                            client_socket.settimeout(2.0)
+                            client_socket.connect(self.socket_name)
+                            client_socket.sendall(b"STATUS")
+                            response = client_socket.recv(16)
+                            client_socket.close()
+
+                            if response == b"ALIVE":
+                                self.logger.info("Primary instance is ALIVE. Sending WAKEUP signal.")
+                                wake_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                                wake_socket.settimeout(2.0)
+                                wake_socket.connect(self.socket_name)
+                                wake_socket.sendall(b"WAKEUP")
+                                wake_socket.close()
+                                
+                                # Silent exit for secondary instance
+                                sys.exit(0)
+                            else:
+                                self.logger.warning(f"Primary instance returned unexpected response: {response}. Assuming stale.")
+                        except (socket.timeout, ConnectionRefusedError):
+                            self.logger.warning("Primary instance is unresponsive (Timeout/Refused). It might be hung or stale.")
+                        except Exception as e2:
+                            self.logger.error(f"Failed to communicate with primary instance: {e2}")
+
+                        # In all 'except' cases or if not ALIVE, we retry binding in the next loop iteration.
+                        continue
+                    else:
+                        self.logger.error("Still unable to bind socket after cleanup attempt. Another instance might be persistent.")
+                        return False
+                else:
+                    self.logger.error(f"Unexpected socket error: {e}")
+                    return False
+        return False
 
     def _socket_listener(self):
         """Listens for commands from other instances."""
         while True:
             try:
+                # server_socket might be closed during shutdown
+                if not self.server_socket or self.server_socket.fileno() == -1:
+                    break
+
                 conn, _ = self.server_socket.accept()
                 data = conn.recv(1024)
                 if data == b"WAKEUP":
                     self.logger.info("Received WAKEUP command via socket.")
                     GLib.idle_add(self.do_activate)
+                elif data == b"QUIT":
+                    self.logger.info("Received QUIT command via socket. Shutting down.")
+                    GLib.idle_add(self.quit)
+                elif data == b"STATUS":
+                    self.logger.debug("Received STATUS query via socket.")
+                    try:
+                        conn.sendall(b"ALIVE")
+                    except Exception:
+                        pass
                 conn.close()
             except Exception as e:
-                self.logger.error(f"Socket listener error: {e}")
                 # If socket is closed (e.g. on shutdown), break loop
-                if self.server_socket.fileno() == -1:
+                if not self.server_socket or self.server_socket.fileno() == -1:
                     break
+                self.logger.error(f"Socket listener error: {e}")
                 # Prevent infinite loop on repeated failure
                 time.sleep(1)
 
@@ -194,26 +280,37 @@ class WallpaperApp(Gtk.Application):
         Gtk.Application.do_startup(self)
         self.logger.debug("Entering WallpaperApp.do_startup")
         self._clean_temp_dir()
-        self.hold()
 
         # Check if another instance is running using Sockets
         if not self._init_single_instance():
             self.logger.info("Exiting because another instance is running.")
-            self.quit()
-            return
+            # Note: We don't call quit() here because we want to exit immediately
+            # and Gtk.Application might not have fully started its main loop yet.
+            sys.exit(0)
 
         # Clean up temp files from previous runs
         self.wallpaper_manager.cleanup_temp_files()
 
-        try:
-            self.css_provider = self.theme_manager.get_css_provider()
-        except Exception as e:
-            self.logger.error(f"Failed to load CSS: {e}", exc_info=True)
+        if self.theme_manager:
+            try:
+                self.css_provider = self.theme_manager.get_css_provider()
+            except Exception as e:
+                self.logger.error(f"Failed to load CSS: {e}", exc_info=True)
+        else:
+            self.logger.warning("ThemeManager not available, skipping CSS loading.")
 
         try:
             self.create_status_icon()
         except Exception as e:
             self.logger.error(f"Failed to create tray icon: {e}", exc_info=True)
+
+        # Only hold() the application if tray icons are potentially available.
+        # Without a tray, closing the window IS quitting — hold() would zombify.
+        if self.tray_available:  # Use self.tray_available after create_status_icon has run
+            self.hold()
+            self.logger.info("Application held (tray support available).")
+        else:
+            self.logger.info("Tray not supported. App will quit when window closes.")
 
         # Force window activation on startup if not running in change-only mode
         # This ensures visibility even if the OS doesn't send the 'activate' signal
@@ -265,7 +362,7 @@ class WallpaperApp(Gtk.Application):
     def create_status_icon(self):
         self.logger.debug("create_status_icon called.")
 
-        if not TRAY_SUPPORTED or AppIndicator3 is None:
+        if not TRAY_SUPPORTED or AppIndicator3_module is None:
             self.logger.warning("Tray support is not available. Skipping tray icon creation.")
             self.tray_available = False
             return
@@ -341,9 +438,9 @@ class WallpaperApp(Gtk.Application):
             if icon_path and os.path.exists(icon_path):
                 init_icon = os.path.splitext(os.path.basename(icon_path))[0]
 
-            self.status_icon = AppIndicator3.Indicator.new(indicator_id, init_icon, AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
-            self.logger.debug(f"AppIndicator3.Indicator.new called successfully with icon '{init_icon}'.")
-            
+            self.status_icon = AppIndicator3_module.Indicator.new(indicator_id, init_icon, AppIndicator3_module.IndicatorCategory.APPLICATION_STATUS)
+            self.logger.debug(f"AppIndicator3_module.Indicator.new called successfully with icon '{init_icon}'.")
+
             # Icon itself is created, so mark as available early
             self.tray_available = True
 
@@ -355,7 +452,7 @@ class WallpaperApp(Gtk.Application):
             self.status_icon.set_menu(self.indicator_menu)
             self.logger.debug("Menu attached to indicator.")
 
-            self.status_icon.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+            self.status_icon.set_status(AppIndicator3_module.IndicatorStatus.ACTIVE)
             self.logger.debug("set_status(ACTIVE) called.")
 
             if icon_path and os.path.exists(icon_path):
@@ -410,12 +507,15 @@ class WallpaperApp(Gtk.Application):
         notification.set_default_action("app.activate")
         self.send_notification("wallshuffle-notification", notification)
 
-    def _handle_change_result(self, result: WallpaperUpdateResult) -> None:
+    def _handle_change_result(self, result: WallpaperUpdateResult, error_message: str) -> None:
         """Handles the result from change_wallpaper on the main GTK thread."""
         if result == WallpaperUpdateResult.SUCCESS:
             if self.win:
                 self.win.update_current_wallpaper_label()
         else:
+            # Use the specific error message if provided, otherwise fall back to generic
+            message = error_message if error_message else "An unknown error occurred while changing wallpaper."
+
             error_map = {
                 WallpaperUpdateResult.NO_SOURCE_CONFIGURED: "No wallpaper source is configured.",
                 WallpaperUpdateResult.NO_IMAGES_FOUND: "No images were found for the current configuration.",
@@ -424,8 +524,12 @@ class WallpaperApp(Gtk.Application):
                 WallpaperUpdateResult.COMMAND_FAILED: "The command to set the wallpaper failed.",
                 WallpaperUpdateResult.CONFIGURATION_ERROR: "A configuration error was found.",
                 WallpaperUpdateResult.FILE_SYSTEM_ERROR: "A file system error occurred.",
+                WallpaperUpdateResult.DESKTOP_ENVIRONMENT_ERROR: "Failed to apply wallpaper settings to your desktop environment.",
             }
-            message = error_map.get(result, "An unknown error occurred while changing wallpaper.")
+            # If a specific error message was not provided by core.py, use the generic one from the map
+            if not error_message:
+                message = error_map.get(result, message)
+
             self._send_notification("Wallshuffle Error", message)
 
         # Re-enable the menu item
@@ -434,10 +538,11 @@ class WallpaperApp(Gtk.Application):
 
     def on_next_wallpaper_clicked(self, widget):
         self.logger.debug("Tray: Next Wallpaper clicked")
+
         def change_and_update():
             try:
-                result = change_wallpaper()
-                GLib.idle_add(self._handle_change_result, result)
+                result, error_msg = change_wallpaper()
+                GLib.idle_add(self._handle_change_result, result, error_msg)
             except Exception as e:
                 self.logger.error(f"Error in change_wallpaper thread: {e}", exc_info=True)
                 # Ensure we re-enable the menu item even if it crashes
@@ -470,20 +575,20 @@ class WallpaperApp(Gtk.Application):
 
             if current_paused_state:  # App is currently paused, so try to resume (start timer)
                 self.logger.info("Attempting to resume wallpaper timer.")
-                command_success = self.wallpaper_manager._run_subprocess(
+                command_success, _ = self.wallpaper_manager._run_subprocess(
                     ["systemctl", "--user", "enable", "wallpaper-changer.timer"],
                     "enable timer",
                     timeout=5,
                 )
                 if command_success:
-                    command_success = self.wallpaper_manager._run_subprocess(
+                    command_success, _ = self.wallpaper_manager._run_subprocess(
                         ["systemctl", "--user", "start", "wallpaper-changer.timer"],
                         "start timer",
                         timeout=5,
                     )
             else:  # App is currently running, so try to pause (stop timer)
                 self.logger.info("Attempting to pause wallpaper timer.")
-                command_success = self.wallpaper_manager._run_subprocess(
+                command_success, _ = self.wallpaper_manager._run_subprocess(
                     ["systemctl", "--user", "stop", "wallpaper-changer.timer"],
                     "stop timer",
                     timeout=5,
@@ -520,7 +625,7 @@ class WallpaperApp(Gtk.Application):
                 self.menu_item_pause.set_label("Resume")
             else:
                 self.menu_item_pause.set_label("Pause")
-            
+
             # Update UI label immediately
             if self.win:
                 self.win.poll_timer_status()
@@ -542,7 +647,8 @@ class WallpaperApp(Gtk.Application):
     def on_support_clicked(self, widget):
         self.logger.debug("Tray: Support clicked")
         import subprocess
-        donate_url = "https://buymeacoffee.com/wallshuffle"
+
+        donate_url = "https://buymeacoffee.com/kayabsoftware"
         try:
             subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
@@ -561,3 +667,14 @@ class WallpaperApp(Gtk.Application):
     def on_quit_clicked(self, widget):
         self.logger.debug("Tray: Quit clicked")
         self.quit()
+
+    def do_shutdown(self) -> None:
+        """Clean up resources on orderly shutdown."""
+        self.logger.info("Application shutting down.")
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except Exception as e:
+                self.logger.error(f"Error closing socket on shutdown: {e}")
+            self.server_socket = None
+        Gtk.Application.do_shutdown(self)

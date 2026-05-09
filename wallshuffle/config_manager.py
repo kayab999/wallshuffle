@@ -11,7 +11,7 @@ import fcntl
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union, TypeVar, overload
 
 from .utils import CONFIG_DIR, CONFIG_FILE
 
@@ -68,7 +68,7 @@ class ConfigManager:
         an exception to allow the application to continue with in-memory config.
         """
         try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
         except OSError as e:
             logging.critical(
                 f"Error creating config directory {CONFIG_DIR}: {e}", exc_info=True
@@ -125,7 +125,12 @@ class ConfigManager:
         Thread-Safety:
             Uses exclusive file lock (LOCK_EX) to prevent concurrent writes.
         """
-        config["Settings"] = {"dark_mode": "false"}
+        config["Settings"] = {
+            "dark_mode": "false",
+            "max_cache_size_mb": "500",
+            "circuit_breaker_failures": "3",
+            "circuit_breaker_cooldown": "15"
+        }
         try:
             with open(CONFIG_FILE, "w") as configfile:
                 try:
@@ -204,14 +209,21 @@ class ConfigManager:
             )
             return False
 
+    _T = TypeVar("_T")
+
+    @overload
+    def get_setting(self, config: configparser.ConfigParser, section: str, option: str, fallback: _T, value_type: Type[_T]) -> _T: ...
+    @overload
+    def get_setting(self, config: configparser.ConfigParser, section: str, option: str, fallback: Any = None, value_type: Type[Any] = str) -> Any: ...
+
     def get_setting(
         self,
         config: configparser.ConfigParser,
         section: str,
         option: str,
         fallback: Any = None,
-        value_type: Type = str,
-    ) -> Union[str, int, float, bool, List[str], None]:
+        value_type: Type[Any] = str,
+    ) -> Any:
         """
         Retrieve a setting from config with type casting and fallback support.
 
@@ -242,17 +254,17 @@ class ConfigManager:
         """
         try:
             if config.has_option(section, option):
-                value = config.get(section, option)
                 if value_type is int:
-                    return int(value)
+                    return config.getint(section, option)
                 elif value_type is bool:
                     return config.getboolean(section, option)
                 elif value_type is float:
-                    return float(value)
+                    return config.getfloat(section, option)
                 elif value_type is list:
+                    value = config.get(section, option)
                     return [item.strip() for item in value.split(",")]
-                else:
-                    return value
+                else: # Default to string
+                    return config.get(section, option)
             return fallback
         except Exception as e:
             # Log the error but DO NOT CRASH. Return the safe default.

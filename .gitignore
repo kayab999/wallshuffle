@@ -90,6 +90,12 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# WallShuffle Packaging
+*.AppDir/
+build_deb/
+*.AppImage
+*.deb
+
 # Environments
 .env
 .venv

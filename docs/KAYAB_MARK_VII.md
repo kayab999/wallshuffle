@@ -1,6 +1,6 @@
 # 🏛️ KAYAB MARK VII: THEORETICAL CONSOLIDATION REPORT
 
-**Status:** Consolidated from `/home/carlos/kayab_next`
+**Status:** Consolidated from local development environment
 **Date:** 2026-01-07
 **Context:** This document maps the current "GENESIS" CLI implementation to the broader "Mark VII" theoretical framework.
 

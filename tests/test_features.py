@@ -64,10 +64,15 @@ class TestWallShuffleFeatures(unittest.TestCase):
 
             mock_instance.get_setting.side_effect = get_setting_side_effect
 
-            with patch('wallshuffle.core.WallpaperManager'):
+            with patch('wallshuffle.core.WallpaperManager') as mock_manager_class:
+                # Setup mock instance return value
+                mock_manager_instance = mock_manager_class.return_value
+                mock_manager_instance.apply_desktop_settings.return_value = (True, "")
+                mock_manager_instance.get_monitor_info.return_value = [{"width": 1920, "height": 1080}]
+                
                 # Run
                 # It should not hang or crash
-                res = change_wallpaper()
+                res, error_msg = change_wallpaper()
                 # Verify we found the image (or at least didn't crash)
                 # Since we mock Manager, apply_desktop_settings is successful unless we fail finding images
                 self.assertEqual(res, WallpaperUpdateResult.SUCCESS)
