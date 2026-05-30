@@ -9,7 +9,6 @@ from .constants import SUPPORTED_EXTENSIONS
 from .core import WallpaperUpdateResult, change_wallpaper
 from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
-from .themes import THEMES
 from .utils import CONFIG_DIR
 from .wallpaper_manager import WallpaperManager
 
@@ -38,7 +37,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.config_manager = self.app.config_manager
         self.config = self.app.config
         self.wallpaper_manager = WallpaperManager()
-        self.theme_manager = getattr(self.app, "theme_manager", None)
+        self.theme_engine = getattr(self.app, "theme_engine", None)
         self._polling_in_progress = False
 
         # Initialize data lists
@@ -72,10 +71,6 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.connect("delete-event", self.on_delete_event)
         self.connect("focus-in-event", self._on_focus_in)
         self.connect("focus-out-event", self._on_focus_out)
-
-        if self.app.css_provider:
-            logging.debug("Applying CSS provider")
-            self.get_style_context().add_provider(self.app.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         logging.debug("Window initialized (hidden)")
 
@@ -231,7 +226,7 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         lbl_theme = Gtk.Label(label="Theme could not be loaded. The app may look different than expected. Check logs for details.")
         lbl_theme.set_line_wrap(True)
         content_area_theme.add(lbl_theme)
-        self.info_bar_theme.set_visible(self.app.theme_manager is None)
+        self.info_bar_theme.set_visible(self.theme_engine is None)
         parent.pack_start(self.info_bar_theme, False, False, 0)
 
     def _build_hero_section(self, parent):
@@ -396,14 +391,17 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         # Theme
         grid.attach(Gtk.Label(label="Theme:", halign=Gtk.Align.START), 2, 1, 1, 1)
         self.combo_theme = Gtk.ComboBoxText()
-        for name in THEMES.keys():
-            self.combo_theme.append_text(name)
+        if self.theme_engine:
+            presets = self.theme_engine.store.get_all_presets()
+            for name in presets.keys():
+                self.combo_theme.append_text(name)
+            
+            current_theme = self.theme_engine.get_current_theme_name()
+            self.combo_theme.set_active(list(presets.keys()).index(current_theme) if current_theme in presets else 0)
+        else:
+            self.combo_theme.append_text("Ubuntu")
+            self.combo_theme.set_active(0)
 
-        current_theme = "Ubuntu"
-        theme_manager = getattr(self.app, "theme_manager", None)
-        if theme_manager:
-            current_theme = theme_manager.current_theme_name
-        self.combo_theme.set_active(list(THEMES.keys()).index(current_theme) if current_theme in THEMES else 0)
         self.combo_theme.connect("changed", self._on_theme_changed)
         grid.attach(self.combo_theme, 3, 1, 1, 1)
 
@@ -464,23 +462,22 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
         self.spin_interval.set_tooltip_text("Disabled: systemd not found.")
         self.check_startup.set_tooltip_text("Disabled: systemd not found.")
 
-    def _on_theme_changed(self, cb):
-        theme_name = cb.get_active_text()
-        if theme_name and self.app and hasattr(self.app, "theme_manager"):
-            self.app.theme_manager.set_theme_name(theme_name)
-
-            # Show/hide custom color pickers
-            if theme_name == "Custom":
+    def _on_theme_event(self, spec):
+        """Handle theme change event from the ThemeEngine."""
+        self.logger.info(f"UI received theme change event: {spec.id}")
+        
+        # Show/hide custom color pickers based on the spec ID
+        if spec.id == "Custom":
+            if hasattr(self, "box_custom_colors"):
                 self.box_custom_colors.show_all()
-            else:
+        else:
+            if hasattr(self, "box_custom_colors"):
                 self.box_custom_colors.hide()
 
-            new_provider = self.app.theme_manager.get_css_provider()
-            style_context = self.get_style_context()
-            if self.app.css_provider:
-                style_context.remove_provider(self.app.css_provider)
-            style_context.add_provider(new_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-            self.app.css_provider = new_provider
+    def _on_theme_changed(self, cb):
+        theme_name = cb.get_active_text()
+        if theme_name and self.theme_engine:
+            self.theme_engine.set_theme(theme_name)
 
     def count_local_images(self, path, recursive):
         if not path or not os.path.isdir(path):
@@ -695,8 +692,11 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
 
             # Theme loading
             theme_name = settings.get("theme", "Ubuntu")
-            theme_keys = list(THEMES.keys())
-            safe_set_active(self.combo_theme, theme_name, theme_keys)
+            if self.theme_engine:
+                theme_keys = list(self.theme_engine.store.get_all_presets().keys())
+                safe_set_active(self.combo_theme, theme_name, theme_keys)
+            else:
+                safe_set_active(self.combo_theme, theme_name, ["Ubuntu"])
 
             # Visibility for custom colors
             if theme_name == "Custom":
@@ -715,20 +715,12 @@ class WallpaperAppWindow(Gtk.ApplicationWindow):
             else:
                 self.box_custom_colors.hide()
 
-            # Proactively reload CSS if theme changed or on startup
-            if self.app and self.app.theme_manager:
+            # Proactively reload theme if engine exists
+            if self.theme_engine:
                 try:
-                    # Update theme manager config
-                    self.app.theme_manager.config = self.config
-                    css_provider = self.app.theme_manager.get_css_provider()
-                    
-                    # Apply to this window
-                    style_context = self.get_style_context()
-                    if hasattr(self.app, 'css_provider') and self.app.css_provider:
-                         style_context.remove_provider(self.app.css_provider)
-                    
-                    self.app.css_provider = css_provider
-                    style_context.add_provider(self.app.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+                    self.theme_engine.config = self.config
+                    self.theme_engine.resolver.config = self.config
+                    self.theme_engine.set_theme(theme_name, save=False)
                     logging.info(f"Theme '{theme_name}' applied successfully.")
                 except Exception as e:
                     logging.error(f"Failed to reload theme: {e}")

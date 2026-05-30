@@ -1,12 +1,42 @@
 import errno
+import fcntl
 import logging
 import os
 import shutil
 import signal  # For signal handlers
 import socket
+import struct
 import sys
 import threading
 import time
+from typing import Optional
+
+class FrameLengthSocket:
+    def __init__(self, sock):
+        self.sock = sock
+    
+    def send_message(self, data: bytes):
+        header = struct.pack('>I', len(data))
+        self.sock.sendall(header + data)
+    
+    def receive_message(self, timeout=5) -> Optional[bytes]:
+        header = self._recv_exact(4, timeout)
+        if header is None: return None
+        message_length = struct.unpack('>I', header)[0]
+        return self._recv_exact(message_length, timeout)
+    
+    def _recv_exact(self, n: int, timeout: float) -> Optional[bytes]:
+        self.sock.settimeout(timeout)
+        data = bytearray()
+        while len(data) < n:
+            try:
+                packet = self.sock.recv(n - len(data))
+                if not packet: return None
+                data.extend(packet)
+            except socket.timeout:
+                return None
+        return bytes(data)
+
 from typing import Any, Optional
 
 import gi
@@ -16,7 +46,7 @@ from .constants import GNOME_COMPAT
 from .core import WallpaperUpdateResult, change_wallpaper
 from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
-from .theme_manager import ThemeManager
+from .theme_engine.engine import ThemeEngine
 from .ui import WallpaperAppWindow
 from .utils import CONFIG_DIR, check_systemd_available
 from .wallpaper_manager import WallpaperManager
@@ -71,7 +101,7 @@ class WallpaperApp(Gtk.Application):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)
 
-        self.logger.debug("Initializing ThemeManager in WallpaperApp.__init__")
+        self.logger.debug("Initializing ThemeEngine in WallpaperApp.__init__")
         self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
@@ -106,11 +136,19 @@ class WallpaperApp(Gtk.Application):
         self.logger.info(f"Systemd Available: {self.is_systemd_available}")
 
         try:
-            self.theme_manager: Optional[ThemeManager] = ThemeManager(self.config_manager, self.config)
-            self.logger.debug("ThemeManager initialized")
+            self.theme_engine = ThemeEngine(self.config_manager, self.config)
+            self.logger.debug("ThemeEngine initialized")
+
+            # Load initial theme from config
+            saved_theme = self.config_manager.get_setting(self.config, "Settings", "theme")
+            if not saved_theme:
+                saved_theme = "Default"
+
+            self.theme_engine.set_theme(saved_theme, save=False)
+            self.logger.info(f"Initial theme applied: {saved_theme}")
         except Exception as e:
-            self.logger.error(f"Failed to initialize ThemeManager: {e}", exc_info=True)
-            self.theme_manager = None
+            self.logger.error(f"Failed to initialize ThemeEngine: {e}", exc_info=True)
+            self.theme_engine = None
 
         # Sync local state with systemd timer
         if self.is_systemd_available:
@@ -211,20 +249,24 @@ class WallpaperApp(Gtk.Application):
                         self.logger.info("Another instance is running. Activating it.")
                         try:
                             # Try to see if it responds to STATUS
-                            client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                            client_socket.settimeout(2.0)
-                            client_socket.connect(self.socket_name)
-                            client_socket.sendall(b"STATUS")
-                            response = client_socket.recv(16)
-                            client_socket.close()
+                            client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                            client_sock.settimeout(2.0)
+                            client_sock.connect(self.socket_name)
+                            
+                            frame_client = FrameLengthSocket(client_sock)
+                            frame_client.send_message(b"STATUS")
+                            response = frame_client.receive_message()
+                            client_sock.close()
 
                             if response == b"ALIVE":
                                 self.logger.info("Primary instance is ALIVE. Sending WAKEUP signal.")
-                                wake_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                                wake_socket.settimeout(2.0)
-                                wake_socket.connect(self.socket_name)
-                                wake_socket.sendall(b"WAKEUP")
-                                wake_socket.close()
+                                wake_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                                wake_sock.settimeout(2.0)
+                                wake_sock.connect(self.socket_name)
+                                
+                                frame_wake = FrameLengthSocket(wake_sock)
+                                frame_wake.send_message(b"WAKEUP")
+                                wake_sock.close()
                                 
                                 # Silent exit for secondary instance
                                 sys.exit(0)
@@ -249,32 +291,34 @@ class WallpaperApp(Gtk.Application):
         """Listens for commands from other instances."""
         while True:
             try:
-                # server_socket might be closed during shutdown
-                if not self.server_socket or self.server_socket.fileno() == -1:
+                if not self.server_socket:
                     break
 
+                # accept() will raise OSError if the socket is closed
                 conn, _ = self.server_socket.accept()
-                data = conn.recv(1024)
-                if data == b"WAKEUP":
-                    self.logger.info("Received WAKEUP command via socket.")
-                    GLib.idle_add(self.do_activate)
-                elif data == b"QUIT":
-                    self.logger.info("Received QUIT command via socket. Shutting down.")
-                    GLib.idle_add(self.quit)
-                elif data == b"STATUS":
-                    self.logger.debug("Received STATUS query via socket.")
-                    try:
-                        conn.sendall(b"ALIVE")
-                    except Exception:
-                        pass
+                
+                # Use FrameLengthSocket to read the message
+                frame_socket = FrameLengthSocket(conn)
+                data = frame_socket.receive_message()
+                
+                if data:
+                    if data == b"WAKEUP":
+                        self.logger.info("Received WAKEUP command via socket.")
+                        GLib.idle_add(self.present_window)
+                    elif data == b"QUIT":
+                        self.logger.info("Received QUIT command via socket. Shutting down.")
+                        GLib.idle_add(self.quit)
+                    elif data == b"STATUS":
+                        self.logger.debug("Received STATUS query via socket.")
+                        frame_socket.send_message(b"ALIVE")
+                
                 conn.close()
+            except OSError:
+                # Socket likely closed (e.g. on shutdown)
+                break
             except Exception as e:
-                # If socket is closed (e.g. on shutdown), break loop
-                if not self.server_socket or self.server_socket.fileno() == -1:
-                    break
                 self.logger.error(f"Socket listener error: {e}")
-                # Prevent infinite loop on repeated failure
-                time.sleep(1)
+                time.sleep(1) # Prevent tight loop on error
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -290,14 +334,6 @@ class WallpaperApp(Gtk.Application):
 
         # Clean up temp files from previous runs
         self.wallpaper_manager.cleanup_temp_files()
-
-        if self.theme_manager:
-            try:
-                self.css_provider = self.theme_manager.get_css_provider()
-            except Exception as e:
-                self.logger.error(f"Failed to load CSS: {e}", exc_info=True)
-        else:
-            self.logger.warning("ThemeManager not available, skipping CSS loading.")
 
         try:
             self.create_status_icon()

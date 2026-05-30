@@ -77,8 +77,10 @@ class WallpaperManager:
                 shutil.rmtree(temp_dir)
                 os.makedirs(temp_dir, mode=0o700, exist_ok=True)
                 self.logger.info(f"Cleaned up temporary directory: {temp_dir}")
-            except Exception as e:
+            except (OSError, shutil.Error) as e:
                 self.logger.error(f"Failed to clean up temporary directory: {e}")
+            except Exception as e:
+                self.logger.exception(f"Unexpected error during temp cleanup: {e}")
 
     def get_desktop_environment(self):
         """Detects the current desktop environment using environment variables and process inspection."""
@@ -203,9 +205,13 @@ class WallpaperManager:
             msg = f"Failed {description}: Command '{command[0]}' not found. Is it installed and in your PATH?"
             self.logger.error(msg)
             return False, msg
+        except OSError as e:
+            msg = f"Failed {description}: OS error: {e}"
+            self.logger.error(msg)
+            return False, msg
         except Exception as e:
             msg = f"Failed {description}: Unexpected error: {e}"
-            self.logger.error(msg)
+            self.logger.exception(msg)
             return False, msg
 
     def get_monitor_info(self) -> List[Dict[str, Any]]:
@@ -223,7 +229,7 @@ class WallpaperManager:
                 from gi.repository import GLib
                 result_container["info"] = self._get_monitor_info_main()
             except Exception as e:
-                self.logger.error(f"Error getting monitor info on main thread: {e}")
+                self.logger.exception(f"Error getting monitor info on main thread: {e}")
             finally:
                 event.set()
             return False

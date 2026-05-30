@@ -106,6 +106,8 @@ Click **Save** to apply your settings and start the timer. The main window will 
 The following critical features and deep security/stability fixes define the 'Gold Master' iteration of WallShuffle:
 
 - **Bulletproof Concurrency:** Implemented non-blocking `fcntl.flock` with timeouts to strictly serialize `change_wallpaper` requests. The system gracefully handles simultaneous calls from systemd timers and user GUI interactions without thread exhaustion or race conditions.
+- **Atomic IPC Security:** Implemented `FrameLengthSocket` protocol for all Unix socket communications, guaranteeing atomic message reception and eliminating vulnerabilities to 'Partial IPC Reads'.
+- **Resilient Exception Handling:** Conducted a comprehensive audit and refactor of exception handling, replacing generic `except Exception` blocks with specific handlers and comprehensive logging. This ensures observability and eliminates silent failures.
 - **Smart LRU Cache Management:** Added an intelligent caching policy for online sources (default 500MB limit). It proactively purges the oldest images using a Least Recently Used (LRU) algorithm, keeping your disk space clean out-of-the-box.
 - **Dynamic Systemd Integration:** Replaced static environment variable capture with dynamic specifiers (`%U`, `%t`) and live session imports. The background service now survives session changes and dbus restarts flawlessly.
 - **Strict Security & Privacy (0o700):** Hardened directory creation permissions. All config, cache, and log folders are now created with `0o700` mode. Command injection risks via cron have been neutralized using `shlex.quote`.

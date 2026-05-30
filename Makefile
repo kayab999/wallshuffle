@@ -1,12 +1,12 @@
 .PHONY: install setup test lint clean build
 
-VENV = venv
+VENV = .venv
 PYTHON = $(VENV)/bin/python
 PIP = $(VENV)/bin/pip
 
 install:
 	$(PIP) install -r requirements.txt
-	$(PIP) install -r requirements-dev.txt
+	$(PIP) install pytest ruff mypy
 
 setup:
 	test -d $(VENV) || python3 -m venv $(VENV)
@@ -30,4 +30,4 @@ clean:
 	rm -f *.spec
 
 build:
-	./build_appimage.sh
+	./scripts/build_appimage.sh
