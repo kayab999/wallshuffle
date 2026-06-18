@@ -11,27 +11,37 @@ import threading
 import time
 from typing import Optional
 
+from .constants import MAX_IPC_MESSAGE_BYTES
+
+
 class FrameLengthSocket:
     def __init__(self, sock):
         self.sock = sock
-    
+
     def send_message(self, data: bytes):
-        header = struct.pack('>I', len(data))
+        if len(data) > MAX_IPC_MESSAGE_BYTES:
+            raise ValueError(f"IPC message exceeds maximum size ({MAX_IPC_MESSAGE_BYTES} bytes)")
+        header = struct.pack(">I", len(data))
         self.sock.sendall(header + data)
-    
+
     def receive_message(self, timeout=5) -> Optional[bytes]:
         header = self._recv_exact(4, timeout)
-        if header is None: return None
-        message_length = struct.unpack('>I', header)[0]
+        if header is None:
+            return None
+        message_length = struct.unpack(">I", header)[0]
+        if message_length > MAX_IPC_MESSAGE_BYTES:
+            logging.warning(f"Rejecting oversized IPC message ({message_length} bytes)")
+            return None
         return self._recv_exact(message_length, timeout)
-    
+
     def _recv_exact(self, n: int, timeout: float) -> Optional[bytes]:
         self.sock.settimeout(timeout)
         data = bytearray()
         while len(data) < n:
             try:
                 packet = self.sock.recv(n - len(data))
-                if not packet: return None
+                if not packet:
+                    return None
                 data.extend(packet)
             except socket.timeout:
                 return None
@@ -60,13 +70,13 @@ AppIndicator3_module = None  # Use a different name to avoid redefinition
 try:
     try:
         gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import AyatanaAppIndicator3 as AppIndicator3_module
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator3_module  # type: ignore[no-redef]
 
         TRAY_SUPPORTED = True
     except (ValueError, ImportError):
         try:
             gi.require_version("AppIndicator3", "0.1")
-            from gi.repository import AppIndicator3 as AppIndicator3_module
+            from gi.repository import AppIndicator3 as AppIndicator3_module  # type: ignore[no-redef]
 
             TRAY_SUPPORTED = True
         except (ValueError, ImportError):
@@ -105,7 +115,7 @@ class WallpaperApp(Gtk.Application):
         self.config_manager = get_config_manager()
         self.config = self.config_manager.load_settings()
         self.wallpaper_manager = WallpaperManager()
-        
+
         # Enforce application hold to prevent premature exit when window is hidden
         # This is a safety measure in addition to the hold() in do_startup()
         self.hold()
@@ -135,6 +145,7 @@ class WallpaperApp(Gtk.Application):
         self.logger.info(f"DE Supported: {self.is_de_supported}")
         self.logger.info(f"Systemd Available: {self.is_systemd_available}")
 
+        self.theme_engine: Optional[ThemeEngine] = None
         try:
             self.theme_engine = ThemeEngine(self.config_manager, self.config)
             self.logger.debug("ThemeEngine initialized")
@@ -188,20 +199,20 @@ class WallpaperApp(Gtk.Application):
         """Ensures the temp directory is empty at startup, respecting locks."""
         temp_dir = os.path.join(CONFIG_DIR, "temp")
         lock_path = os.path.join(CONFIG_DIR, "change_wallpaper.lock")
-        
+
         try:
-            # Try to acquire the lock. If busy, another instance (timer or CLI) 
+            # Try to acquire the lock. If busy, another instance (timer or CLI)
             # is using the temp directory. We skip cleaning in that case.
             lock_file = open(lock_path, "w")
             try:
                 # Use LOCK_NB to avoid hanging the GUI startup
                 fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                
+
                 if os.path.exists(temp_dir):
                     self.logger.info(f"Cleaning temp directory: {temp_dir}")
                     shutil.rmtree(temp_dir)
                 os.makedirs(temp_dir, mode=0o700, exist_ok=True)
-                
+
             except (IOError, BlockingIOError):
                 self.logger.info("Skip temp cleanup: Another process is currently changing wallpaper.")
             finally:
@@ -252,7 +263,7 @@ class WallpaperApp(Gtk.Application):
                             client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                             client_sock.settimeout(2.0)
                             client_sock.connect(self.socket_name)
-                            
+
                             frame_client = FrameLengthSocket(client_sock)
                             frame_client.send_message(b"STATUS")
                             response = frame_client.receive_message()
@@ -263,15 +274,18 @@ class WallpaperApp(Gtk.Application):
                                 wake_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                                 wake_sock.settimeout(2.0)
                                 wake_sock.connect(self.socket_name)
-                                
+
                                 frame_wake = FrameLengthSocket(wake_sock)
                                 frame_wake.send_message(b"WAKEUP")
                                 wake_sock.close()
-                                
+
                                 # Silent exit for secondary instance
                                 sys.exit(0)
                             else:
-                                self.logger.warning(f"Primary instance returned unexpected response: {response}. Assuming stale.")
+                                response_text = response.decode("utf-8", errors="replace") if response else "None"
+                                self.logger.warning(
+                                    f"Primary instance returned unexpected response: {response_text}. Assuming stale."
+                                )
                         except (socket.timeout, ConnectionRefusedError):
                             self.logger.warning("Primary instance is unresponsive (Timeout/Refused). It might be hung or stale.")
                         except Exception as e2:
@@ -296,11 +310,11 @@ class WallpaperApp(Gtk.Application):
 
                 # accept() will raise OSError if the socket is closed
                 conn, _ = self.server_socket.accept()
-                
+
                 # Use FrameLengthSocket to read the message
                 frame_socket = FrameLengthSocket(conn)
                 data = frame_socket.receive_message()
-                
+
                 if data:
                     if data == b"WAKEUP":
                         self.logger.info("Received WAKEUP command via socket.")
@@ -311,7 +325,7 @@ class WallpaperApp(Gtk.Application):
                     elif data == b"STATUS":
                         self.logger.debug("Received STATUS query via socket.")
                         frame_socket.send_message(b"ALIVE")
-                
+
                 conn.close()
             except OSError:
                 # Socket likely closed (e.g. on shutdown)

@@ -5,13 +5,12 @@ import os
 import shutil
 import subprocess
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 import gi
 from PIL import Image
 
 # Deferred imports for Gdk/GLib to avoid crashes in headless environments
-
 from .constants import GNOME_COMPAT
 
 
@@ -185,7 +184,7 @@ class WallpaperManager:
         """Helper to run shell commands safely. Returns (success: bool, error_message: str)."""
         if isinstance(command, str):
             command = command.split()
-            
+
         try:
             cmd_str = ' '.join(command)
             self.logger.debug(f"Executing: {cmd_str} ({description})")
@@ -226,7 +225,6 @@ class WallpaperManager:
 
         def callback():
             try:
-                from gi.repository import GLib
                 result_container["info"] = self._get_monitor_info_main()
             except Exception as e:
                 self.logger.exception(f"Error getting monitor info on main thread: {e}")
@@ -244,7 +242,7 @@ class WallpaperManager:
             self.logger.warning("GLib/Gdk not available. Falling back to headless detection.")
             return self._get_monitor_info_headless()
 
-        return result_container["info"]
+        return cast(List[Dict[str, Any]], result_container["info"])
 
     def _get_monitor_info_headless(self) -> List[Dict[str, Any]]:
         """Fallback monitor detection for headless mode (try xrandr, then /sys/class/drm)."""
@@ -276,7 +274,7 @@ class WallpaperManager:
 
     def _get_monitor_info_drm(self) -> List[Dict[str, Any]]:
         """Last resort monitor detection by reading /sys/class/drm (no coordinates, just counts)."""
-        monitor_info = []
+        monitor_info: List[Dict[str, Any]] = []
         drm_path = "/sys/class/drm"
         if not os.path.isdir(drm_path):
             return monitor_info
@@ -288,7 +286,7 @@ class WallpaperManager:
                 # Filter for cardX-OUTPUT or just OUTPUT directories that are connected
                 if not os.path.exists(os.path.join(path, "status")):
                     continue
-                
+
                 with open(os.path.join(path, "status"), "r") as f:
                     if f.read().strip() != "connected":
                         continue
@@ -311,7 +309,7 @@ class WallpaperManager:
                     "x": current_x, "y": 0,
                 })
                 current_x += width # Simple horizontal tiling assumption
-                
+
             if monitor_info:
                 self.logger.debug(f"DRM fallback detected monitors: {monitor_info}")
         except Exception as e:
@@ -368,7 +366,7 @@ class WallpaperManager:
                     offset = (original_img.height - new_height) // 2
                     img_cropped = original_img.crop((0, offset, original_img.width, offset + new_height))
 
-                composite_img = img_cropped.resize((max_x, max_y), Image.LANCZOS)
+                composite_img = img_cropped.resize((max_x, max_y), Image.Resampling.LANCZOS)
 
                 # Ensure RGB for JPEG
                 if composite_img.mode == "RGBA":
@@ -423,13 +421,13 @@ class WallpaperManager:
                             if img_ratio > target_ratio:
                                 new_height = target_h
                                 new_width = int(new_height * img_ratio)
-                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                 left = (new_width - target_w) // 2
                                 final_img = resized.crop((left, 0, left + target_w, target_h))
                             else:
                                 new_width = target_w
                                 new_height = int(new_width / img_ratio)
-                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                 top = (new_height - target_h) // 2
                                 final_img = resized.crop((0, top, target_w, top + target_h))
 
@@ -444,7 +442,7 @@ class WallpaperManager:
                                 new_height = target_h
                                 new_width = int(new_height * img_ratio)
 
-                            resized = img.resize((new_width, new_height), Image.LANCZOS)
+                            resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
                             # Create black background for this monitor patch
                             bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
@@ -456,7 +454,7 @@ class WallpaperManager:
 
                         elif mode == "stretched":
                             # Stretched: Resize to exact dimensions (distorted)
-                            final_img = img.resize((target_w, target_h), Image.LANCZOS)
+                            final_img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
                         elif mode == "centered":
                             # Centered: No resizing, just crop or center
@@ -501,7 +499,7 @@ class WallpaperManager:
 
                         elif mode == "spanned":
                              # Spanned on a per-monitor basis acts like zoom/cover usually
-                             final_img = img.resize((target_w, target_h), Image.LANCZOS) # Fallback to stretch/zoom?
+                             final_img = img.resize((target_w, target_h), Image.Resampling.LANCZOS) # Fallback to stretch/zoom?
                              # Actually spanned usually means one big image across all.
                              # But here we are in "Different image on each monitor" flow.
                              # So "spanned" doesn't make sense per monitor. Treat as zoom.
@@ -513,13 +511,13 @@ class WallpaperManager:
                              if img_ratio > target_ratio:
                                  new_height = target_h
                                  new_width = int(new_height * img_ratio)
-                                 resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                 resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                  left = (new_width - target_w) // 2
                                  final_img = resized.crop((left, 0, left + target_w, target_h))
                              else:
                                  new_width = target_w
                                  new_height = int(new_width / img_ratio)
-                                 resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                 resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                  top = (new_height - target_h) // 2
                                  final_img = resized.crop((0, top, target_w, top + target_h))
                         else:
@@ -529,13 +527,13 @@ class WallpaperManager:
                             if img_ratio > target_ratio:
                                 new_height = target_h
                                 new_width = int(new_height * img_ratio)
-                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                 left = (new_width - target_w) // 2
                                 final_img = resized.crop((left, 0, left + target_w, target_h))
                             else:
                                 new_width = target_w
                                 new_height = int(new_width / img_ratio)
-                                resized = img.resize((new_width, new_height), Image.LANCZOS)
+                                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                                 top = (new_height - target_h) // 2
                                 final_img = resized.crop((0, top, target_w, top + target_h))
 
@@ -730,7 +728,7 @@ class WallpaperManager:
                 for (var i = 0; i < allDesktops.length; i++) {{
                     var d = allDesktops[i];
                     if (!d) continue;
-                    
+
                     d.wallpaperPlugin = "org.kde.image";
                     d.currentConfigGroup = Array("Wallpaper", "org.kde.image", "General");
 

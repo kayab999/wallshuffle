@@ -5,8 +5,9 @@ PYTHON = $(VENV)/bin/python
 PIP = $(VENV)/bin/pip
 
 install:
+	test -d $(VENV) || python3 -m venv $(VENV)
 	$(PIP) install -r requirements.txt
-	$(PIP) install pytest ruff mypy
+	$(PIP) install pytest pytest-cov ruff mypy types-requests
 
 setup:
 	test -d $(VENV) || python3 -m venv $(VENV)
@@ -17,8 +18,15 @@ setup:
 test:
 	$(PYTHON) -m pytest
 
-lint:
+test-cov:
+	$(PYTHON) -m pytest --cov=wallshuffle --cov-report=term-missing
+
+lint: lint-ruff lint-mypy
+
+lint-ruff:
 	$(PYTHON) -m ruff check .
+
+lint-mypy:
 	$(PYTHON) -m mypy wallshuffle
 
 format:

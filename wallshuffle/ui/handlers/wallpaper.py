@@ -1,0 +1,126 @@
+import logging
+import os
+import threading
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import GdkPixbuf, GLib, Gtk
+
+from ...constants import MultiMonitorMode
+from ...core import WallpaperUpdateResult, change_wallpaper
+from ...gui_helpers import show_error_dialog
+from ...utils import CONFIG_DIR
+
+
+class WallpaperHandlersMixin:
+    def update_current_wallpaper_label(self):
+        history_file = os.path.join(CONFIG_DIR, "history.log")
+        paths = []
+        if os.path.exists(history_file):
+            try:
+                with open(history_file, "r") as f:
+                    # Read enough lines to cover potential monitors
+                    paths = [line.strip() for line in f.readlines()[:10] if line.strip()]
+            except IOError:
+                pass
+
+        monitor_mode = self.config_manager.get_setting(self.config, "Settings", "multi_monitor_mode", MultiMonitorMode.SINGLE)
+
+        target_count = 1
+        if monitor_mode == MultiMonitorMode.DIFFERENT:
+            monitor_info = self.wallpaper_manager.get_monitor_info()
+            target_count = len(monitor_info) if monitor_info else 1
+
+        display_paths = paths[:target_count]
+
+        # Update text entry
+        if not display_paths:
+             self.entry_current_path.set_text("No wallpaper set")
+        elif len(display_paths) == 1:
+             self.entry_current_path.set_text(display_paths[0])
+        else:
+             self.entry_current_path.set_text(f"{len(display_paths)} images set (Multi-Monitor)")
+
+        # Clear existing thumbnails immediately to indicate refresh
+        self.preview_box.foreach(lambda w: self.preview_box.remove(w))
+
+        if not display_paths:
+            return
+
+        def load_thumbnails(paths_to_load):
+            pixbufs = []
+            for p in paths_to_load:
+                try:
+                    if os.path.exists(p) and os.path.isfile(p):
+                        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(p, -1, 150, True)
+                        pixbufs.append(pb)
+                    else:
+                        pixbufs.append(None)
+                except Exception as e:
+                    logging.error(f"Failed to load thumbnail for {p}: {e}")
+                    pixbufs.append(None)
+
+            GLib.idle_add(self._update_preview_box, pixbufs)
+
+        threading.Thread(target=load_thumbnails, args=(display_paths,), daemon=True).start()
+
+    def _update_preview_box(self, pixbufs):
+        # Clear again to be safe
+        self.preview_box.foreach(lambda w: self.preview_box.remove(w))
+
+        for pb in pixbufs:
+            img = Gtk.Image()
+            if pb:
+                img.set_from_pixbuf(pb)
+            else:
+                img.set_from_icon_name("image-missing", Gtk.IconSize.DIALOG)
+                img.set_pixel_size(100)
+
+            img.set_visible(True)
+            self.preview_box.pack_start(img, False, False, 0)
+
+        self.preview_box.show_all()
+
+    def _handle_change_result(self, result: WallpaperUpdateResult, error_message: str):
+        """Handles the result from change_wallpaper on the main GTK thread."""
+        if result == WallpaperUpdateResult.SUCCESS:
+            self.update_current_wallpaper_label()
+        else:
+            # Use the specific error message if provided, otherwise fall back to generic
+            message = error_message if error_message else "An unknown error occurred."
+
+            error_map = {
+                WallpaperUpdateResult.NO_SOURCE_CONFIGURED: "No wallpaper source is configured. Please check your settings.",
+                WallpaperUpdateResult.NO_IMAGES_FOUND: "No images were found. If using Unsplash, check your API key.",
+                WallpaperUpdateResult.NETWORK_ERROR: "Network error. If using Unsplash, check your internet and API key.",
+                WallpaperUpdateResult.UNSUPPORTED_DESKTOP: "Your desktop environment is not supported for automatic wallpaper changes.",
+                WallpaperUpdateResult.COMMAND_FAILED: "The command to set the wallpaper failed. Check logs for details.",
+                WallpaperUpdateResult.CONFIGURATION_ERROR: "Configuration error. Please check your settings.",
+                WallpaperUpdateResult.FILE_SYSTEM_ERROR: "A file system error occurred. Check permissions and paths.",
+                WallpaperUpdateResult.DESKTOP_ENVIRONMENT_ERROR: "Failed to apply wallpaper settings to your desktop environment.",
+            }
+            # If a specific error message was not provided by core.py, use the generic one from the map
+            if not error_message:
+                message = error_map.get(result, message)
+
+            show_error_dialog(message, self)
+
+        # Re-enable the button
+        self.btn_apply_now.set_sensitive(True)
+
+    def on_next_wallpaper_clicked(self, widget):
+        # Auto-save current settings before refreshing so it uses the latest UI state
+        self.on_save_clicked(widget, hide_window=False, skip_timer_setup=True)
+
+        def change_and_update():
+            result, error_msg = change_wallpaper()
+            GLib.idle_add(self._handle_change_result, result, error_msg)
+
+        try:
+            self.btn_apply_now.set_sensitive(False)
+            thread = threading.Thread(target=change_and_update, daemon=True)
+            thread.start()
+        except Exception as e:
+            logging.critical(f"Error starting wallpaper change thread from GUI: {e}", exc_info=True)
+            self.btn_apply_now.set_sensitive(True)  # Re-enable on thread start failure

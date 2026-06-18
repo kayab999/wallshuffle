@@ -1,12 +1,14 @@
 import logging
 from typing import Optional
+
+from .backend import GTKBackend, ThemeBackend
 from .events import EventBus
-from .store import ThemeStore
-from .resolver import ThemeResolver
-from .validator import ThemeValidator
 from .renderer import ThemeRenderer
-from .backend import ThemeBackend, GTKBackend
+from .resolver import ThemeResolver
 from .spec import ThemeSpec
+from .store import ThemeStore
+from .validator import ThemeValidator
+
 
 class ThemeEngine:
     def __init__(self, config_manager, config, backend: Optional[ThemeBackend] = None, event_bus: Optional[EventBus] = None):
@@ -23,29 +25,29 @@ class ThemeEngine:
         """Resolves, validates, renders, and applies a theme by name."""
         try:
             self.logger.info(f"Setting theme to: {name}")
-            
+
             # Resolve the spec (Preset -> Distro -> User -> Session)
             spec = self.resolver.resolve(name)
-            
+
             # Validate the spec
             ThemeValidator.validate(spec)
-            
+
             # Render to CSS provider
             css_provider = ThemeRenderer.get_css_provider(spec)
-            
+
             # Apply via backend
             self.backend.apply(css_provider)
-            
+
             # Update state
             self.current_spec = spec
-            
+
             # Persist if requested
             if save:
                 self.config_manager.save_settings(self.config, {"theme": name})
-            
+
             # Notify subscribers
             self.events.emit("theme_changed", spec)
-            
+
             return True
         except Exception as e:
             self.logger.error(f"Failed to set theme '{name}': {e}", exc_info=True)
@@ -66,4 +68,5 @@ class ThemeEngine:
     def get_current_theme_name(self) -> str:
         if self.current_spec:
             return self.current_spec.id
-        return self.config_manager.get_setting(self.config, "Settings", "theme", "Ubuntu")
+        theme = self.config_manager.get_setting(self.config, "Settings", "theme", "Ubuntu")
+        return str(theme)

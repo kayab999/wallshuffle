@@ -124,7 +124,7 @@ def main():
             # Preliminary check for a valid graphical environment
             display = os.environ.get("DISPLAY")
             dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
-            
+
             if not display:
                  logging.error("DISPLAY environment variable is not set. GUI cannot start.")
                  print("ERROR: DISPLAY is not set. Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
@@ -135,11 +135,11 @@ def main():
                 import gi
                 gi.require_version("Gtk", "3.0")
                 from gi.repository import Gtk
-                
+
                 # Check if we can actually open the display
                 if not Gtk.init_check()[0]:
                      raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
-                
+
                 logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}).")
             except Exception as e:
                 logging.error(

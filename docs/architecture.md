@@ -1,71 +1,75 @@
-# 🏛️ KAYAB v4.0 "GENESIS" - Mark VII Runtime Kernel
+# WallShuffle Architecture
 
-## 📚 Theoretical Context
-This architecture represents the **Phase 3 (Heuristic Implementation)** of the broader **Kayab Mark VII** framework.
-For full theoretical background, see: `docs/KAYAB_MARK_VII.md`.
+WallShuffle is a single-process GTK3 desktop application for Linux that changes wallpapers on a schedule or on demand. It runs as a background tray app with a configuration window, and exposes a headless CLI entry point for systemd timers and keyboard shortcuts.
 
-## 📜 Filosofía del Diseño: El Principio del Roble
-"El roble más fuerte no fue el más alto desde el principio, sino la semilla que arraigó correctamente."
+## Runtime Modes
 
-GENESIS equilibra tres fuerzas:
-1. **Simplicidad Inicial** (deployable hoy en una laptop)
-2. **Arquitectura Correcta** (escalable a datacenters sin reescribir)
-3. **Verificabilidad Progresiva** (seguridad demostrable en cada etapa)
+| Mode | Entry | Behavior |
+|------|-------|----------|
+| GUI | `wallshuffle` | Gtk.Application with tray icon and settings window |
+| Headless | `wallshuffle --change` | One-shot wallpaper change, no GUI |
 
-## 🎯 Alcance y Fases de Evolución
-- **Fase 1: GENESIS-LOCAL (Meses 0-6)** ✅ Implementable HOY
-  - Target: Ubuntu CLI tool, single-machine
-  - Complejidad: ~5K SLOC
-  - Costo: $0
-- **Fase 2: GENESIS-CLUSTER (Meses 6-18)**
-  - Target: 3-node consensus system
-- **Fase 3: GENESIS-DISTRIBUTED (Meses 18-36)**
-  - Target: Multi-datacenter infrastructure
+## Module Layout
 
-## 🏗️ ARQUITECTURA GENESIS-LOCAL (v4.0)
+```
+wallshuffle/
+├── __main__.py          # CLI args, logging, backend selection (X11 on Wayland)
+├── app.py               # Gtk.Application, tray, single-instance IPC
+├── core.py              # change_wallpaper() orchestration
+├── wallpaper_manager.py # Desktop environment adapters (GNOME/KDE/XFCE)
+├── config_manager.py    # Thread-safe singleton config I/O
+├── online_sources.py    # Unsplash client, cache, circuit breaker
+├── image_discovery.py   # Local folder scanning (uses image_index cache)
+├── image_index.py       # mtime-based folder scan cache
+├── sequential_state.py  # Persisted index for sequential rotation
+├── effects.py           # Pillow-based image effects
+├── system_integration.py# systemd timer and cron fallback
+├── theme_engine/        # Theme resolution, validation, GTK CSS rendering
+└── ui/                  # Settings window
+    ├── panels.py        # GTK layout builders (mixin)
+    ├── window.py        # Main window shell + init
+    ├── dialogs.py       # ManageFoldersDialog
+    └── handlers/        # Event handler mixins (polling, source, save, …)
+```
 
-### Capas Arquitectónicas
-1. **Layer 4: Human Interface (CLI/TUI)** - Rich interactive prompts
-2. **Layer 3: Decision Engine (Risk Evaluator)** - Heuristic risk scoring
-3. **Layer 2: Execution Guardian (Safety Kernel)** - Atomic transactions
-4. **Layer 1: System Interface (Sandboxed Executor)** - Namespaced execution
-5. **Layer 0: Operating System (Ubuntu 25)**
+## Wallpaper Change Pipeline
 
-### 🔒 COMPONENTES CRÍTICOS DETALLADOS
+```mermaid
+flowchart TD
+    A[change_wallpaper] --> B[Acquire flock lock]
+    B --> C[Load config]
+    C --> D{Source}
+    D -->|Local| E[image_discovery]
+    D -->|Unsplash| F[online_sources parallel fetch]
+    D -->|URL| G[HTTP download with size cap]
+    E --> H[Optional effects]
+    F --> H
+    G --> H
+    H --> I{Multi-monitor mode}
+    I --> J[wallpaper_manager.apply_desktop_settings]
+    J --> K[Log history + cleanup temp files]
+```
 
-#### Componente 1: Safety Kernel (El Núcleo de Seguridad)
-Garantiza atomicidad y reversibilidad.
-- **Features:** Anti-TOCTOU, Path traversal protection, SHA-256 hashes, Verified Rollback.
-- **Snapshot Logic:** Pre-execution verification of disk space and integrity.
+## Concurrency Model
 
-#### Componente 2: Risk Evaluator (Motor de Riesgo Pragmático)
-Evalúa riesgo sin complejidad excesiva.
-- **Score:** Base Score + Intent Drift (Embeddings) + Context Multiplier.
-- **Drift Detection:** Cosine similarity between goal and action.
+- **Process lock:** `fcntl.flock` on `change_wallpaper.lock` serializes CLI, timer, and manual changes.
+- **Config lock:** Shared/exclusive locks on `config.ini` for read-modify-write safety.
+- **GUI threads:** Blocking work (network, systemd, folder counts) runs in daemon threads; UI updates via `GLib.idle_add`.
+- **IPC:** Abstract Unix socket with length-prefixed messages (`WAKEUP`, `QUIT`, `STATUS`).
 
-#### Componente 3: Lite Formal Verification (TLA+ Pragmático)
-Verifica invariantes críticas con timeout de 500ms.
-- **Fallback:** Degrada a heurístico si TLA+ excede el tiempo.
+## Desktop Integration
 
-#### Componente 4: Challenge-Response System
-Confirmación entrópica para operaciones de alto riesgo (tokens aleatorios).
+| Environment | Mechanism |
+|-------------|-----------|
+| GNOME family | `gsettings` + optional multi-monitor stitch |
+| KDE Plasma | `dbus-send` + `evaluateScript` |
+| XFCE | `xfconf-query` per monitor |
+| Scheduling | systemd user timer (primary), cron fallback |
 
-## 📊 PROTOCOLO DE EJECUCIÓN
-1. **Pre-Validación:** Sanitización y Canonicalización.
-2. **Evaluación de Riesgo:** Allow / Challenge / Formal Verify / Deny.
-3. **Snapshot:** Backup verificado.
-4. **Ejecución:** Sandbox (Firejail/Bubblewrap).
-5. **Validación Post-Ejecución:** Rollback automático si falla.
-6. **Auditoría:** Log inmutable (SQLite -> Kafka -> Blockchain).
+## Configuration
 
-## 🛡️ THREAT MODEL (STRIDE Analysis - v4.0)
-- **Spoofing:** Local user auth.
-- **Tampering:** SHA-256 + immutable log.
-- **Repudiation:** Signed audit entries.
-- **Info Disclosure:** File permissions.
-- **DoS:** Rate limiting.
-- **Elevation of Privilege:** Root detection + deny.
+Stored in `~/.config/wallshuffle/config.ini` (mode `0700`). Folder categories live in a `[FolderCategories]` section. Sequential rotation state is stored separately in `sequential_state.json`.
 
-## 🔬 VALIDACIÓN EXPERIMENTAL (Metas)
-- **Lectura:** <20ms latency.
-- **Mutación:** <120ms latency.
+## Packaging
+
+Distributed as AppImage, `.deb`, Flatpak manifest, and editable pip install. CI runs ruff, mypy, and pytest on Ubuntu with Python 3.10–3.12.

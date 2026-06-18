@@ -69,7 +69,7 @@ class TestWallShuffleFeatures(unittest.TestCase):
                 mock_manager_instance = mock_manager_class.return_value
                 mock_manager_instance.apply_desktop_settings.return_value = (True, "")
                 mock_manager_instance.get_monitor_info.return_value = [{"width": 1920, "height": 1080}]
-                
+
                 # Run
                 # It should not hang or crash
                 res, error_msg = change_wallpaper()

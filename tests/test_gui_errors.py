@@ -1,11 +1,12 @@
 import configparser
-import unittest
-from unittest.mock import patch, MagicMock
 import os
 import shutil
 import tempfile
+import unittest
+from unittest.mock import patch
 
 from wallshuffle.core import WallpaperUpdateResult, change_wallpaper
+
 
 class TestGuiErrors(unittest.TestCase):
     def setUp(self):
@@ -37,7 +38,7 @@ class TestGuiErrors(unittest.TestCase):
              patch("wallshuffle.config_manager.CONFIG_FILE", self.config_file), \
              patch("wallshuffle.core.get_config_manager") as mock_get_cm, \
              patch("wallshuffle.wallpaper_manager.WallpaperManager.get_desktop_environment", return_value="gnome"):
-            
+
             mock_instance = mock_get_cm.return_value
             mock_instance.get_setting.side_effect = get_setting_side_effect
             mock_instance.load_settings.return_value = config

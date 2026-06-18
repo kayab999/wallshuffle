@@ -1,5 +1,6 @@
-import weakref
 import logging
+import weakref
+
 
 class EventBus:
     def __init__(self):
@@ -51,5 +52,5 @@ class EventBus:
                     ref(*args, **kwargs)
                 except Exception as e:
                     self.logger.error(f"Error in EventBus callback for {event}: {e}")
-        
+
         self.listeners[event] = active_listeners

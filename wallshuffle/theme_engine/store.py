@@ -1,12 +1,14 @@
-import os
 import logging
-from .spec import ThemeSpec
+from typing import Dict
+
 from .presets import THEMES
+from .spec import ThemeSpec
+
 
 class ThemeStore:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self._presets = {}
+        self._presets: Dict[str, ThemeSpec] = {}
         self._load_presets()
 
     def _load_presets(self):

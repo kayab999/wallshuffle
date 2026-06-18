@@ -1,8 +1,10 @@
-import os
 import logging
-from typing import Dict, Optional
+import os
+from typing import Dict, Optional, Tuple
+
 from .spec import ThemeSpec
 from .store import ThemeStore
+
 
 class ThemeResolver:
     def __init__(self, store: ThemeStore, config_manager, config):
@@ -12,7 +14,7 @@ class ThemeResolver:
         self.config = config
         self._session_overrides: Dict[str, Dict[str, str]] = {}
 
-    def detect_distro(self) -> (Optional[str], Optional[str]):
+    def detect_distro(self) -> Tuple[Optional[str], Optional[str]]:
         """Detects the Linux distribution ID and ID_LIKE from /etc/os-release."""
         distro_id = None
         distro_like = None
@@ -38,7 +40,7 @@ class ThemeResolver:
         4. Session overrides (runtime)
         """
         self.logger.debug(f"Resolving theme: {name}")
-        
+
         # 1. Start with the preset base
         base_spec = self.store.get_preset(name)
         resolved_tokens = base_spec.tokens.copy()
@@ -48,7 +50,7 @@ class ThemeResolver:
         if name == "Default":
             distro_id, distro_like = self.detect_distro()
             possible_ids = [distro_id, distro_like] if distro_like else [distro_id]
-            
+
             presets = self.store.get_all_presets()
             for d_id in filter(None, possible_ids):
                 d_id = d_id.lower()

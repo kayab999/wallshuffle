@@ -30,7 +30,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        make install
+        make setup
         
     - name: Lint with Ruff & Mypy
       run: |
@@ -39,4 +39,4 @@ jobs:
     - name: Test with Pytest
       run: |
         # Run non-GUI tests only on CI (headless)
-        venv/bin/python -m pytest -m "not gui"
+        .venv/bin/python -m pytest -m "not gui"

@@ -61,7 +61,7 @@ For Debian, Ubuntu, Linux Mint, and derivatives:
 
 ### Method 3: From Source (Developers)
 ```bash
-git clone https://github.com/kayabsoftware/wallshuffle.git
+git clone https://github.com/kayab999/wallshuffle.git
 cd wallshuffle
 ./install.sh
 ```
@@ -138,7 +138,7 @@ If you prefer to build the AppImage yourself:
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/kayabsoftware/wallshuffle.git
+    git clone https://github.com/kayab999/wallshuffle.git
     cd wallshuffle
     ```
 2.  **Set up the environment:**

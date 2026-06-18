@@ -35,17 +35,17 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
     Fallback for systems without systemd. Manages a crontab entry.
     """
     import subprocess
-    
+
     tag = "# WALLSHUFFLE_TIMER"
     exec_path = _find_executable_for_timer()
-    
+
     # Prepare environment context for CRON with shell escaping to prevent command injection
     import shlex
     uid = os.getuid()
     dbus_address = shlex.quote(os.environ.get("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"))
     display = shlex.quote(os.environ.get("DISPLAY", ":0"))
     xdg = shlex.quote(os.environ.get("XDG_CURRENT_DESKTOP", ""))
-    
+
     if exec_path == sys.executable:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         # working_dir doesn't need quote if it's from project_root, but safer
@@ -56,7 +56,7 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
 
     # Wrap with environment variables. shlex.quote already adds quotes if needed.
     full_cmd = f"DBUS_SESSION_BUS_ADDRESS={dbus_address} DISPLAY={display} XDG_CURRENT_DESKTOP={xdg} {command} {tag}"
-    
+
     # Cron interval: */X * * * *
     cron_entry = f"*/{interval} * * * * {full_cmd}"
 
@@ -64,10 +64,10 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
         # Get existing crontab
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False, timeout=5)
         lines = result.stdout.splitlines() if result.returncode == 0 else []
-        
+
         # Filter out existing entries
-        new_lines = [l for l in lines if tag not in l and l.strip()]
-        
+        new_lines = [line for line in lines if tag not in line and line.strip()]
+
         if startup:
             new_lines.append(cron_entry)
             logging.info(f"Adding cron entry: {cron_entry}")
@@ -110,7 +110,7 @@ def setup_systemd_timer(interval, startup, is_systemd_available, run_subprocess_
             exec_start_cmd = f"{esc_exec} --change"
             working_dir = os.path.expanduser("~")
 
-        # No capturamos DISPLAY de forma estática. En su lugar, confiamos en que 
+        # No capturamos DISPLAY de forma estática. En su lugar, confiamos en que
         # el entorno de systemd --user tenga las variables necesarias, o las
         # importamos dinámicamente si es necesario.
         env_vars = f'Environment="DBUS_SESSION_BUS_ADDRESS={dbus_address}"\n'

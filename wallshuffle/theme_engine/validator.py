@@ -1,5 +1,10 @@
+from __future__ import annotations
+
 import re
-from typing import Set, Dict, Callable
+from typing import TYPE_CHECKING, Callable, Dict, Set
+
+if TYPE_CHECKING:
+    from .spec import ThemeSpec
 
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{3,6}$")
 
@@ -23,7 +28,7 @@ CONSTRAINED_TOKENS: Dict[str, Callable[[str], bool]] = {
 
 class ThemeValidator:
     @staticmethod
-    def validate(spec: "ThemeSpec"):
+    def validate(spec: ThemeSpec):
         """Validates the ThemeSpec against required and constrained tokens."""
         missing = REQUIRED_TOKENS - spec.tokens.keys()
         if missing:
@@ -34,10 +39,10 @@ class ThemeValidator:
             if key in REQUIRED_TOKENS | OPTIONAL_TOKENS:
                 if not HEX_RE.match(value):
                     raise ValueError(f"Invalid hex color for {key}: {value}")
-            
+
             # Apply specific constraints
             if key in CONSTRAINED_TOKENS:
                 if not CONSTRAINED_TOKENS[key](value):
                     raise ValueError(f"Constraint failed for token {key}: {value}")
-        
+
         return True

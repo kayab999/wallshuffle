@@ -5,7 +5,8 @@ import logging
 import os
 import shutil
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
+from urllib.parse import quote_plus
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -13,6 +14,7 @@ from urllib3.util.retry import Retry
 
 from .constants import CACHE_EXPIRATION_HOURS
 from .utils import CACHE_DIR, CONFIG_DIR
+
 
 class UnsplashConfigError(Exception):
     """Exception raised when Unsplash API is not properly configured."""
@@ -27,7 +29,7 @@ class OnlineSourceManager:
     def __init__(self, config_manager, config):
         self.config_manager = config_manager
         self.config = config
-        
+
         # Thresholds configurables (Fase 2 Hardening)
         self.max_failures = config_manager.get_setting(config, "Settings", "circuit_breaker_failures", 3, int)
         self.cooldown_minutes = config_manager.get_setting(config, "Settings", "circuit_breaker_cooldown", 15, int)
@@ -75,17 +77,16 @@ class OnlineSourceManager:
         OnlineSourceManager._consecutive_failures = 0
         OnlineSourceManager._last_failure_time = None
 
-    def _get_cache_key(self, keywords):
-        """Generates a unique filename for the cache based on keywords."""
+    def _get_cache_key(self, keywords: str, index: int = 0) -> str:
+        """Generates a unique filename for the cache based on keywords and monitor index."""
         safe_keywords = keywords.replace(" ", "_") if keywords else "random"
-        # Combine keywords with date (daily rotation) to ensure freshness
         date_str = datetime.date.today().isoformat()
-        key_str = f"{safe_keywords}_{date_str}"
+        key_str = f"{safe_keywords}_{date_str}_{index}"
         return hashlib.md5(key_str.encode()).hexdigest() + ".jpg"
 
-    def _get_cached_image(self, keywords):
+    def _get_cached_image(self, keywords: str, index: int = 0) -> Optional[str]:
         """Returns path to valid cached image if available, else None."""
-        filename = self._get_cache_key(keywords)
+        filename = self._get_cache_key(keywords, index)
         cache_path = os.path.join(CACHE_DIR, filename)
 
         if os.path.exists(cache_path):
@@ -105,9 +106,9 @@ class OnlineSourceManager:
 
         return None
 
-    def _save_image_to_cache(self, image_data, keywords):
+    def _save_image_to_cache(self, image_data: bytes, keywords: str, index: int = 0) -> None:
         """Saves downloaded image data to cache directory."""
-        filename = self._get_cache_key(keywords)
+        filename = self._get_cache_key(keywords, index)
         cache_path = os.path.join(CACHE_DIR, filename)
         try:
             with open(cache_path, "wb") as f:
@@ -115,18 +116,17 @@ class OnlineSourceManager:
         except IOError as e:
             logging.error(f"Failed to save image to cache: {e}")
 
-    def _save_image_file_to_cache(self, source_path, keywords):
+    def _save_image_file_to_cache(self, source_path: str, keywords: str, index: int = 0) -> None:
         """Copies downloaded image file to cache directory."""
-        filename = self._get_cache_key(keywords)
+        filename = self._get_cache_key(keywords, index)
         cache_path = os.path.join(CACHE_DIR, filename)
         try:
             shutil.copy2(source_path, cache_path)
         except IOError as e:
             logging.error(f"Failed to copy image to cache: {e}")
 
-    def fetch_unsplash_wallpaper(self, keywords, index=0) -> Tuple[Optional[str], str]:
-        # First, try to get from cache
-        cached_image_path = self._get_cached_image(keywords)
+    def fetch_unsplash_wallpaper(self, keywords: str, index: int = 0) -> Tuple[Optional[str], str]:
+        cached_image_path = self._get_cached_image(keywords, index)
         if cached_image_path:
             return cached_image_path, ""
 
@@ -138,7 +138,9 @@ class OnlineSourceManager:
             error_msg = "Unsplash API key is not configured. Please set it in the settings."
             logging.error(error_msg)
             return None, error_msg
-        url = f"https://api.unsplash.com/photos/random?query={keywords}&client_id={unsplash_api_key}"
+
+        encoded_keywords = quote_plus(keywords or "")
+        url = f"https://api.unsplash.com/photos/random?query={encoded_keywords}&client_id={unsplash_api_key}"
         try:
             # Use self.session instead of requests directly
             response = self.session.get(url, timeout=10)
@@ -158,9 +160,8 @@ class OnlineSourceManager:
                     f.write(chunk)
                 image_path = f.name
 
-            # Read back for cache
-            self._save_image_file_to_cache(image_path, keywords)
-            
+            self._save_image_file_to_cache(image_path, keywords, index)
+
             # Ejecutar limpieza proactiva de caché (Fase 2)
             OnlineSourceManager.cleanup_old_cache(max_size_mb=self.max_cache_size_mb)
 
@@ -265,8 +266,8 @@ class OnlineSourceManager:
         expiration_seconds = CACHE_EXPIRATION_HOURS * 3600
 
         logging.debug("Starting cache maintenance...")
-        
-        files_data = []
+
+        files_data: list[dict[str, Any]] = []
         try:
             for f in os.listdir(CACHE_DIR):
                 path = os.path.join(CACHE_DIR, f)
@@ -276,7 +277,7 @@ class OnlineSourceManager:
                         files_data.append({
                             "path": path,
                             "size": stat.st_size,
-                            "mtime": stat.st_mtime
+                            "mtime": stat.st_mtime,
                         })
                     except OSError:
                         continue
@@ -293,7 +294,7 @@ class OnlineSourceManager:
                         remaining_files.append(item)
                 else:
                     remaining_files.append(item)
-            
+
             if removed_count > 0:
                 logging.info(f"Cache cleanup (expiration): Removed {removed_count} files.")
 
@@ -301,11 +302,11 @@ class OnlineSourceManager:
             if max_size_mb is not None:
                 max_bytes = max_size_mb * 1024 * 1024
                 current_bytes = sum(f["size"] for f in remaining_files)
-                
+
                 if current_bytes > max_bytes:
                     # Ordenar por mtime (más antiguo primero para LRU)
                     remaining_files.sort(key=lambda x: x["mtime"])
-                    
+
                     purged_size = 0
                     purged_count = 0
                     for item in remaining_files:
@@ -318,7 +319,7 @@ class OnlineSourceManager:
                             purged_count += 1
                         except OSError:
                             pass
-                    
+
                     if purged_count > 0:
                         logging.info(f"Cache cleanup (LRU): Purged {purged_count} files ({purged_size / (1024*1024):.1f} MB) to stay under {max_size_mb} MB.")
 

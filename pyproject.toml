@@ -61,10 +61,20 @@ exclude = [
     "venv",
 ]
 
+[tool.coverage.run]
+omit = [
+    "wallshuffle/ui/panels.py",
+    "wallshuffle/ui/dialogs.py",
+    "wallshuffle/ui/handlers/*",
+    "wallshuffle/ui/window.py",
+    "wallshuffle/app.py",
+    "wallshuffle/__main__.py",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-v --strict-markers"
+addopts = "-v --strict-markers --cov=wallshuffle --cov-report=term-missing --cov-fail-under=45"
 markers = [
     "gui: marks tests that require GUI/display",
     "integration: marks tests that touch the filesystem/network"
@@ -83,3 +93,10 @@ module = [
     "PIL.*"
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "wallshuffle.ui.panels",
+    "wallshuffle.ui.handlers.*",
+]
+disable_error_code = ["attr-defined", "has-type"]

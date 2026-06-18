@@ -11,7 +11,7 @@ import fcntl
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional, Type, Union, TypeVar, overload
+from typing import Any, Dict, Optional, Type, TypeVar, overload
 
 from .utils import CONFIG_DIR, CONFIG_FILE
 

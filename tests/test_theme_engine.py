@@ -1,23 +1,25 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from wallshuffle.theme_engine.engine import ThemeEngine
 from wallshuffle.theme_engine.spec import ThemeSpec
-from wallshuffle.theme_engine.events import EventBus
 from wallshuffle.theme_engine.validator import ThemeValidator
+
 
 class MockConfigManager:
     def __init__(self):
         self.settings = {"Settings": {"theme": "Ubuntu"}}
-    
+
     def load_settings(self):
         return self.settings
-    
+
     def get_setting(self, config, section, key, default=None, value_type=None):
         val = self.settings.get(section, {}).get(key, default)
         if value_type and val is not None:
             return value_type(val)
         return val
-    
+
     def save_settings(self, config, settings_dict):
         self.settings["Settings"].update(settings_dict)
         return True
@@ -43,9 +45,9 @@ def test_theme_resolution_custom_overrides(engine):
 def test_event_bus_reactivity(engine):
     callback = MagicMock()
     engine.events.on("theme_changed", callback)
-    
+
     engine.set_theme("Arch")
-    
+
     callback.assert_called_once()
     spec = callback.call_args[0][0]
     assert isinstance(spec, ThemeSpec)
@@ -53,14 +55,13 @@ def test_event_bus_reactivity(engine):
 
 def test_session_override(engine):
     engine.set_theme("Ubuntu")
-    original_accent = engine.current_spec.tokens["accent"]
-    
     # Apply session override
     engine.override_session("Ubuntu", {"accent": "#00FF00"})
-    
+
     assert engine.current_spec.tokens["accent"] == "#00FF00"
+    assert engine.current_spec.tokens["accent"] != engine.store.get_preset("Ubuntu").tokens["accent"]
     # Verify it didn't change the preset base forever (well, it stays in resolver)
-    
+
 def test_validation_fails_on_invalid_hex(engine):
     # Manually trigger a resolution that would fail validation
     with pytest.raises(ValueError):
@@ -70,7 +71,7 @@ def test_validation_fails_on_invalid_hex(engine):
 def test_distro_detection_mock(engine, monkeypatch):
     # Mock /etc/os-release detection
     monkeypatch.setattr(engine.resolver, "detect_distro", lambda: ("arch", "archlinux"))
-    
+
     # 'Default' theme should now resolve to Arch tokens
     engine.set_theme("Default")
     assert engine.current_spec.tokens["accent"] == "#1793D1" # Arch accent

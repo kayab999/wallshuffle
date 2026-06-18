@@ -1,14 +1,17 @@
 import gi
+
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
+
 from .spec import ThemeSpec
+
 
 class ThemeRenderer:
     @staticmethod
     def render_to_css(spec: ThemeSpec) -> str:
         """Transforms ThemeSpec tokens into a GTK3 CSS string."""
         theme = spec.tokens
-        
+
         css = f"""
 * {{
     transition: background 200ms ease-in-out, border-color 200ms ease-in-out, box-shadow 200ms ease-in-out;

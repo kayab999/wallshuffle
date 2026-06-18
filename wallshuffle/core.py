@@ -2,17 +2,26 @@ import fcntl
 import logging
 import os
 import random
-import requests
-import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum, auto
-from typing import Tuple, List
+from typing import List, Optional, Tuple
+
+import requests
 
 from .config_manager import get_config_manager
-from .constants import SUPPORTED_EXTENSIONS
+from .constants import (
+    MAX_DOWNLOAD_BYTES,
+    SUPPORTED_EXTENSIONS,
+    ImageEffect,
+    MultiMonitorMode,
+    WallpaperSource,
+)
 from .effects import apply_image_effect
+from .image_discovery import find_images_in_folder
 from .online_sources import OnlineSourceManager
-from .utils import log_wallpaper_history, CONFIG_DIR
+from .sequential_state import select_sequential_images
+from .utils import CONFIG_DIR, log_wallpaper_history
 from .wallpaper_manager import WallpaperManager
 
 
@@ -59,13 +68,13 @@ def change_wallpaper() -> Tuple[WallpaperUpdateResult, str]:
 
     try:
         lock_file = open(lock_path, "w")
-        
+
         # Bloqueo no bloqueante con reintentos para evitar esperas infinitas (Fase 1 Hardening)
         import time
         start_time = time.time()
         timeout = 5.0 # Segundos
         acquired = False
-        
+
         while time.time() - start_time < timeout:
             try:
                 fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -73,12 +82,12 @@ def change_wallpaper() -> Tuple[WallpaperUpdateResult, str]:
                 break
             except (IOError, BlockingIOError):
                 time.sleep(0.1)
-        
+
         if not acquired:
             logging.error(f"Could not acquire wallpaper change lock within {timeout}s. Another process might be hung.")
             lock_file.close()
-            return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, f"Lock timeout: Another instance is still running or hung.")
-            
+            return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, "Lock timeout: Another instance is still running or hung.")
+
         logging.debug("Adquired wallpaper change lock.")
     except Exception as e:
         logging.error(f"Failed to setup wallpaper change lock: {e}")
@@ -117,9 +126,11 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     current_de = manager.get_desktop_environment()
     logging.info(f"Detected Desktop Environment: {current_de}")
 
-    source: str = config_manager.get_setting(config, "Settings", "source", "Local Folder", str)
-    effect: str = config_manager.get_setting(config, "Settings", "effect", "None", str)
-    multi_monitor_mode: str = config_manager.get_setting(config, "Settings", "multi_monitor_mode", "Single image on all monitors", str)
+    source: str = config_manager.get_setting(config, "Settings", "source", WallpaperSource.LOCAL_FOLDER, str)
+    effect: str = config_manager.get_setting(config, "Settings", "effect", ImageEffect.NONE, str)
+    multi_monitor_mode: str = config_manager.get_setting(
+        config, "Settings", "multi_monitor_mode", MultiMonitorMode.SINGLE, str
+    )
 
     # Get monitor info early to determine how many images we need
     monitor_info = manager.get_monitor_info()
@@ -127,7 +138,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
 
     # Determine how many images to fetch
     images_needed = 1
-    if multi_monitor_mode == "Different image on each monitor":
+    if multi_monitor_mode == MultiMonitorMode.DIFFERENT:
         images_needed = monitor_count
         logging.info(f"Multi-monitor mode active: Need {images_needed} distinct images.")
 
@@ -136,13 +147,13 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     logging.info(f"Source: {source}, Effect: {effect}, Multi-Monitor Mode: {multi_monitor_mode}")
 
     # Check for Unsplash configuration issues and fallback if necessary
-    if source == "Unsplash":
+    if source == WallpaperSource.UNSPLASH:
         unsplash_api_key: str = config_manager.get_setting(config, "Settings", "unsplash_api_key", "", str)
         if not unsplash_api_key or unsplash_api_key == "YOUR_UNSPLASH_API_KEY":
             logging.warning("Unsplash source selected but no API Key found. Attempting fallback to Local Folder.")
-            source = "Local Folder"
+            source = WallpaperSource.LOCAL_FOLDER
 
-    if source == "Local Folder":
+    if source == WallpaperSource.LOCAL_FOLDER:
         folder_setting: str = config_manager.get_setting(config, "Settings", "folder", "", str)
         if not folder_setting:
             logging.error("Local Folder source selected but no folder path provided.")
@@ -160,42 +171,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
         elif os.path.isdir(folder):
             try:
                 recursive_search: bool = config_manager.get_setting(config, "Settings", "recursive_search", False, bool)
-
-                found_images: List[str] = []
-                if recursive_search:
-                    # Recursive search with safe symlink following and bounded depth
-                    visited_dirs = set()
-                    MAX_DEPTH = 50
-
-                    for root, dirs, files in os.walk(folder, followlinks=True):
-                        # Detect loops
-                        try:
-                            # Resolve symlinks to absolute paths for loop detection
-                            real_root = os.path.realpath(root)
-                            if real_root in visited_dirs:
-                                logging.warning(f"Symlink loop detected or already visited: {root} -> {real_root}. Skipping.")
-                                dirs[:] = []  # Don't recurse further
-                                continue
-
-                            # Bounded depth check (prevent infinite recursion attacks)
-                            # Calculate depth relative to the start folder
-                            start_depth = folder.rstrip(os.sep).count(os.sep)
-                            current_depth = root.rstrip(os.sep).count(os.sep)
-                            if (current_depth - start_depth) > MAX_DEPTH:
-                                logging.warning(f"Maximum directory traversal depth ({MAX_DEPTH}) exceeded at {root}.")
-                                dirs[:] = []
-                                # continue instead of break to allow siblings, but walk modifies dirs in-place to stop recursion down this path
-                                continue
-
-                            visited_dirs.add(real_root)
-                        except OSError as e:
-                            logging.warning(f"Error resolving path {root}: {e}. Skipping loop check.")
-
-                        for f in files:
-                            if f.lower().endswith(tuple(SUPPORTED_EXTENSIONS)):
-                                found_images.append(os.path.join(root, f))
-                else:
-                    found_images = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(tuple(SUPPORTED_EXTENSIONS))]
+                found_images = find_images_in_folder(folder, recursive=recursive_search)
 
                 if found_images:
                     random_order: bool = config_manager.get_setting(config, "Settings", "random_order", True, bool)
@@ -207,9 +183,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
                         if random_order:
                             image_paths = random.sample(found_images, images_needed)
                         else:
-                            # State for sequential isn't purely persisted.
-                            # Since we don't track the last shown index globally, default to first N images.
-                            image_paths = found_images[:images_needed]
+                            image_paths = select_sequential_images(found_images, folder, images_needed)
                     else:
                         # Not enough images, fill with what we have (randomly sampling with replacement to fill gaps)
                         # But simpler: just shuffle and cycle, or cycle in order
@@ -228,24 +202,29 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             logging.error(f"Local path not found or invalid: {folder}")
             return (WallpaperUpdateResult.NO_SOURCE_CONFIGURED, f"The configured local path '{folder}' is not a valid folder or file.")
 
-    elif source == "Unsplash":
+    elif source == WallpaperSource.UNSPLASH:
         keywords: str = config_manager.get_setting(config, "Settings", "keywords", "", str)
         logging.info(f"Source: Unsplash, Keywords: {keywords}")
 
         online_source_manager = OnlineSourceManager(config_manager, config)
         try:
-            paths_temp: List[str] = []
-            for i in range(images_needed):
-                path, error_msg = online_source_manager.fetch_unsplash_wallpaper(keywords, index=i)
-                if path:
-                    paths_temp.append(path)
-                else:
-                    # If a specific error message is returned, propagate it
-                    if error_msg:
-                        return (WallpaperUpdateResult.NETWORK_ERROR, error_msg)
-                    # Otherwise, it means no images were found for this fetch
-                    break
+            paths_temp: List[str] = [""] * images_needed
 
+            def fetch_at_index(index: int) -> Tuple[int, Optional[str], str]:
+                path, error_msg = online_source_manager.fetch_unsplash_wallpaper(keywords, index=index)
+                return index, path, error_msg
+
+            max_workers = min(images_needed, 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(fetch_at_index, index) for index in range(images_needed)]
+                for future in as_completed(futures):
+                    index, path, error_msg = future.result()
+                    if path:
+                        paths_temp[index] = path
+                    elif error_msg:
+                        return (WallpaperUpdateResult.NETWORK_ERROR, error_msg)
+
+            paths_temp = [path for path in paths_temp if path]
             if not paths_temp:
                 return (WallpaperUpdateResult.NO_IMAGES_FOUND, "Unsplash source returned no images. Check keywords or API key.")
 
@@ -258,7 +237,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             logging.error(f"Error fetching from Unsplash: {e}")
             return (WallpaperUpdateResult.NETWORK_ERROR, f"Error fetching from Unsplash: {e}")
 
-    elif source == "URL / Hyperlink":
+    elif source == WallpaperSource.URL:
         hyperlink_url: str = config_manager.get_setting(config, "Settings", "hyperlink_url", "", str)
         if not hyperlink_url or not hyperlink_url.startswith("http"):
             logging.error("URL / Hyperlink source selected but no valid URL provided.")
@@ -269,11 +248,30 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             response = requests.get(hyperlink_url, stream=True, timeout=15)
             response.raise_for_status()
 
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > MAX_DOWNLOAD_BYTES:
+                        return (
+                            WallpaperUpdateResult.NETWORK_ERROR,
+                            f"Remote image exceeds maximum allowed size ({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB).",
+                        )
+                except ValueError:
+                    logging.warning(f"Invalid Content-Length header: {content_length}")
+
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             os.makedirs(temp_dir, mode=0o700, exist_ok=True)
             tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir)
+            downloaded = 0
             try:
                 for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(
+                            f"Download exceeded maximum allowed size ({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)"
+                        )
                     tmp_file.write(chunk)
                 tmp_file.close()
                 image_path = tmp_file.name
@@ -290,6 +288,9 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
         except requests.exceptions.RequestException as e:
             logging.error(f"Network error fetching from URL {hyperlink_url}: {e}")
             return (WallpaperUpdateResult.NETWORK_ERROR, f"Network error fetching from URL: {e}")
+        except ValueError as e:
+            logging.error(f"URL download rejected: {e}")
+            return (WallpaperUpdateResult.NETWORK_ERROR, str(e))
         except Exception as e:
             logging.error(f"Error saving image from URL: {e}")
             return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, f"Error saving image from URL: {e}")
@@ -303,7 +304,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
         log_wallpaper_history(p)
 
     final_image_paths: List[str] = []
-    if effect != "None":
+    if effect != ImageEffect.NONE:
         logging.info(f"Applying effect: {effect}")
         for p in image_paths:
             final_image_paths.append(apply_image_effect(p, effect))
@@ -316,7 +317,7 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     # So if multi_monitor_mode == "Span image across all monitors", we do the OLD logic (single image -> composite).
     # If multi_monitor_mode == "Different image on each monitor", we keep them separate (unless gnome requires stitching).
 
-    if multi_monitor_mode == "Span image across all monitors":
+    if multi_monitor_mode == MultiMonitorMode.SPAN:
         if not final_image_paths:
             logging.error("No images available for composition.")
             return (WallpaperUpdateResult.NO_IMAGES_FOUND, "No images available for spanning across monitors.")
@@ -361,8 +362,6 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     if success:
         # Proactive Safe Temp File Cleanup
         try:
-            from .utils import CONFIG_DIR
-
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             if os.path.exists(temp_dir):
                 kept_files = set(os.path.abspath(p) for p in final_image_paths if p)
