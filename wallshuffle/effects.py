@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 
@@ -25,6 +26,11 @@ def apply_image_effect(image_path, effect_type):
 
     try:
         with Image.open(image_path) as opened:
+            # Fase 3: corrige EXIF orientation antes de downscale/effect
+            try:
+                opened = ImageOps.exif_transpose(opened) or opened
+            except Exception:
+                pass
             processed: Image.Image = _maybe_downscale(opened)
             if effect_type == ImageEffect.GRAYSCALE:
                 processed = processed.convert("L")
@@ -39,7 +45,12 @@ def apply_image_effect(image_path, effect_type):
 
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             os.makedirs(temp_dir, mode=0o700, exist_ok=True)
-            processed_image_path = os.path.join(temp_dir, f"processed_wallpaper_{effect_type.lower()}.jpg")
+            # Unique per source so multi-monitor DIFFERENT + effect does not clobber.
+            source_token = hashlib.sha256(os.path.abspath(image_path).encode()).hexdigest()[:10]
+            processed_image_path = os.path.join(
+                temp_dir,
+                f"processed_{effect_type.lower()}_{source_token}.jpg",
+            )
             processed.save(processed_image_path)
             return processed_image_path
     except FileNotFoundError:

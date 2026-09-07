@@ -13,6 +13,7 @@ from .config_manager import get_config_manager
 from .constants import (
     MAX_DOWNLOAD_BYTES,
     SUPPORTED_EXTENSIONS,
+    WALLPAPER_CHANGE_TIMEOUT_SEC,
     ImageEffect,
     MultiMonitorMode,
     WallpaperSource,
@@ -66,46 +67,69 @@ def change_wallpaper() -> Tuple[WallpaperUpdateResult, str]:
     lock_path = os.path.join(CONFIG_DIR, "change_wallpaper.lock")
     os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
 
+    lock_file = None
     try:
         lock_file = open(lock_path, "w")
 
         # Bloqueo no bloqueante con reintentos para evitar esperas infinitas (Fase 1 Hardening)
         import time
-        start_time = time.time()
+        start_time = time.monotonic()
         timeout = 5.0 # Segundos
         acquired = False
 
-        while time.time() - start_time < timeout:
+        while time.monotonic() - start_time < timeout:
             try:
                 fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 acquired = True
                 break
-            except (IOError, BlockingIOError):
+            except (IOError, BlockingIOError, OSError):
                 time.sleep(0.1)
 
         if not acquired:
             logging.error(f"Could not acquire wallpaper change lock within {timeout}s. Another process might be hung.")
-            lock_file.close()
+            try:
+                lock_file.close()
+            except Exception:
+                pass
             return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, "Lock timeout: Another instance is still running or hung.")
 
         logging.debug("Adquired wallpaper change lock.")
     except Exception as e:
         logging.error(f"Failed to setup wallpaper change lock: {e}")
+        if lock_file is not None:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
         return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, f"Lock error: {e}")
 
     try:
         return _change_wallpaper_impl()
     finally:
-        try:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
-            lock_file.close()
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                lock_file.close()
+            except Exception:
+                pass
             logging.debug("Released wallpaper change lock.")
-        except Exception as e:
-            logging.error(f"Error releasing wallpaper change lock: {e}")
 
 def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     config_manager = get_config_manager()
-    config = config_manager.load_settings()
+    # Fase 1: captura excepción controlada de lock timeout para distinguir de config corrupta
+    try:
+        config = config_manager.load_settings()
+    except Exception as e:
+        # Captura ConfigLockTimeoutError (TimeoutError subclass) y otros errores de I/O
+        # Headless debe loguear sin dialog; caller core retornará FILE_SYSTEM_ERROR
+        logging.error(f"Failed to load config (lock timeout or I/O): {e}")
+        # Si es timeout de lock, es recuperable en próximo intento — no truncar config
+        if isinstance(e, TimeoutError):
+            return (WallpaperUpdateResult.FILE_SYSTEM_ERROR, f"Config file locked (timeout): {e}")
+        return (WallpaperUpdateResult.CONFIGURATION_ERROR, f"Failed to load config: {e}")
 
     if "Settings" not in config:
         logging.error("Error: 'Settings' section not found in config file.")
@@ -217,12 +241,29 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             max_workers = min(images_needed, 4)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(fetch_at_index, index) for index in range(images_needed)]
-                for future in as_completed(futures):
-                    index, path, error_msg = future.result()
-                    if path:
-                        paths_temp[index] = path
-                    elif error_msg:
-                        return (WallpaperUpdateResult.NETWORK_ERROR, error_msg)
+                try:
+                    # Fase 1: usa WALLPAPER_CHANGE_TIMEOUT_SEC (30s)
+                    for future in as_completed(futures, timeout=WALLPAPER_CHANGE_TIMEOUT_SEC):
+                        try:
+                            index, path, error_msg = future.result(timeout=WALLPAPER_CHANGE_TIMEOUT_SEC)
+                        except Exception as e:
+                            # Timeout or worker exception -> treat as network error
+                            logging.error(f"Unsplash fetch future failed/timeout: {e}")
+                            for f in futures:
+                                f.cancel()
+                            return (WallpaperUpdateResult.NETWORK_ERROR, f"Unsplash fetch timeout or error: {e}")
+                        if path:
+                            paths_temp[index] = path
+                        elif error_msg:
+                            for f in futures:
+                                f.cancel()
+                            return (WallpaperUpdateResult.NETWORK_ERROR, error_msg)
+                except Exception as e:
+                    # as_completed timeout (overall)
+                    logging.error(f"Unsplash parallel fetch timed out after {WALLPAPER_CHANGE_TIMEOUT_SEC}s: {e}")
+                    for f in futures:
+                        f.cancel()
+                    return (WallpaperUpdateResult.NETWORK_ERROR, f"Unsplash fetch timeout after {WALLPAPER_CHANGE_TIMEOUT_SEC}s: {e}")
 
             paths_temp = [path for path in paths_temp if path]
             if not paths_temp:
@@ -245,7 +286,8 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
 
         logging.info(f"Source: URL, Fetching from: {hyperlink_url}")
         try:
-            response = requests.get(hyperlink_url, stream=True, timeout=15)
+            import time as _time
+            response = requests.get(hyperlink_url, stream=True, timeout=(5, 10))
             response.raise_for_status()
 
             content_length = response.headers.get("Content-Length")
@@ -263,8 +305,11 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             os.makedirs(temp_dir, mode=0o700, exist_ok=True)
             tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir)
             downloaded = 0
+            deadline = _time.monotonic() + WALLPAPER_CHANGE_TIMEOUT_SEC  # Fase 1: strict budget via constante
             try:
                 for chunk in response.iter_content(chunk_size=8192):
+                    if _time.monotonic() > deadline:
+                        raise TimeoutError(f"URL download exceeded {WALLPAPER_CHANGE_TIMEOUT_SEC}s deadline (slowloris protection)")
                     if not chunk:
                         continue
                     downloaded += len(chunk)
@@ -276,12 +321,20 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
                 tmp_file.close()
                 image_path = tmp_file.name
             except Exception:
-                tmp_file.close()
+                try:
+                    tmp_file.close()
+                except Exception:
+                    pass
                 try:
                     os.unlink(tmp_file.name)
                 except OSError:
                     pass
                 raise
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
             image_paths = [image_path] * images_needed
 

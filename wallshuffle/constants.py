@@ -6,6 +6,11 @@ MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_IPC_MESSAGE_BYTES = 1024
 MAX_DIRECTORY_DEPTH = 50
 MAX_EFFECT_DIMENSION = 3840
+# Hardening caps (prevent OOM/swap thrashing on huge multi-monitor or image sets)
+# ~33 MP -> e.g., 8192x4096, 7680x4320 headroom; scales down larger canvases with BILINEAR
+MAX_CANVAS_PIXELS = 33_554_432
+MAX_CACHED_IMAGES = 10_000  # limit local discovery to avoid unbounded memory / I/O storms
+WALLPAPER_CHANGE_TIMEOUT_SEC = 30  # watchdog for Next Wallpaper background thread
 
 
 class WallpaperSource:

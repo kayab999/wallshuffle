@@ -3,7 +3,7 @@ import os
 import shutil
 import sys
 
-from .utils import escape_systemd_path
+from .utils import escape_systemd_path, escape_systemd_working_dir
 
 
 def _find_executable_for_timer():
@@ -57,8 +57,23 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
     # Wrap with environment variables. shlex.quote already adds quotes if needed.
     full_cmd = f"DBUS_SESSION_BUS_ADDRESS={dbus_address} DISPLAY={display} XDG_CURRENT_DESKTOP={xdg} {command} {tag}"
 
-    # Cron interval: */X * * * *
-    cron_entry = f"*/{interval} * * * * {full_cmd}"
+    # Cron minute field only accepts 1–59 step. Larger intervals use hours.
+    safe_interval = max(int(interval), 0)
+    if safe_interval <= 0:
+        cron_schedule = None
+    elif safe_interval < 60:
+        cron_schedule = f"*/{safe_interval} * * * *"
+    elif safe_interval % 60 == 0 and (safe_interval // 60) < 24:
+        hours = safe_interval // 60
+        cron_schedule = f"0 */{hours} * * *"
+    else:
+        # Fallback: run hourly (best-effort for unusual values)
+        cron_schedule = "0 * * * *"
+        logging.warning(
+            f"Cron fallback: interval {safe_interval}m is not representable exactly; using hourly."
+        )
+
+    cron_entry = f"{cron_schedule} {full_cmd}" if cron_schedule else None
 
     try:
         # Get existing crontab
@@ -68,11 +83,11 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
         # Filter out existing entries
         new_lines = [line for line in lines if tag not in line and line.strip()]
 
-        if startup:
+        if cron_entry:
             new_lines.append(cron_entry)
             logging.info(f"Adding cron entry: {cron_entry}")
         else:
-            logging.info("Removing cron entry.")
+            logging.info("Removing cron entry (interval is 0).")
 
         # Write back
         new_crontab = "\n".join(new_lines) + "\n"
@@ -117,26 +132,32 @@ def setup_systemd_timer(interval, startup, is_systemd_available, run_subprocess_
         # Podríamos añadir un script de detección de DISPLAY si fuera necesario,
         # pero para la mayoría de entornos modernos con DBUS funcional basta.
 
+        # WorkingDirectory= does not support quotes (unlike ExecStart=),
+        # so escape specifiers/backslashes without wrapping in quotes.
+        esc_working_dir = escape_systemd_working_dir(working_dir)
         service_content = f"""[Unit]
 Description=WallShuffle Service
 
 [Service]
 Type=oneshot
-WorkingDirectory={working_dir}
+WorkingDirectory={esc_working_dir}
 ExecStart={exec_start_cmd}
 {env_vars}
 """
         with open(os.path.join(systemd_path, "wallpaper-changer.service"), "w") as f:
             f.write(service_content)
 
+        # interval > 0 enables periodic rotation. "startup" only adds OnBootSec.
+        # interval == 0 means automatic rotation is off (timer disabled).
+        safe_interval = max(int(interval), 0)
+        boot_line = "OnBootSec=2min\n" if startup else ""
         timer_content = f"""[Unit]
 Description=Run WallShuffle periodically
 
 [Timer]
-OnUnitActiveSec={interval}min
+OnUnitActiveSec={max(safe_interval, 1)}min
 OnActiveSec=1s
-OnBootSec=2min
-
+{boot_line}
 [Install]
 WantedBy=timers.target
 """
@@ -165,7 +186,8 @@ WantedBy=timers.target
         import_cmd = ["systemctl", "--user", "import-environment", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS"]
         run_subprocess_func(import_cmd, "import-environment", timeout=5)
 
-        if startup:
+        enable_timer = max(int(interval), 0) > 0
+        if enable_timer:
             run_subprocess_func(["systemctl", "--user", "enable", "wallpaper-changer.timer"], "enable timer", timeout=5)
             run_subprocess_func(["systemctl", "--user", "start", "wallpaper-changer.timer"], "start timer", timeout=5)
         else:

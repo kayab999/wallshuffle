@@ -122,10 +122,32 @@ fi
 
 # 6. Install Desktop Entry
 echo "Configuring desktop entry..."
-cp "$DESKTOP_FILE_SOURCE" "$DESKTOP_DIR/$APP_NAME.desktop"
+# Prefer repo assets if present (running from source tree), else CWD artifact.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$REPO_ROOT/assets/wallshuffle_installed.desktop" ]; then
+  DESKTOP_SRC="$REPO_ROOT/assets/wallshuffle_installed.desktop"
+elif [ -f "$DESKTOP_FILE_SOURCE" ]; then
+  DESKTOP_SRC="$DESKTOP_FILE_SOURCE"
+else
+  DESKTOP_SRC="$REPO_ROOT/assets/wallshuffle.desktop"
+fi
+cp "$DESKTOP_SRC" "$DESKTOP_DIR/$APP_NAME.desktop"
 
-# Update Exec path to wrapper
-sed -i "s|^Exec=.*|Exec=$INSTALL_DIR/$APP_NAME|" "$DESKTOP_DIR/$APP_NAME.desktop"
+# Rewrite only the main Desktop Entry Exec (first Exec=), not Desktop Action lines.
+if grep -q '^Exec=' "$DESKTOP_DIR/$APP_NAME.desktop"; then
+  # Replace first Exec= only
+  awk -v exe="$INSTALL_DIR/$APP_NAME" '
+    BEGIN { done=0 }
+    /^Exec=/ && !done { print "Exec=" exe; done=1; next }
+    { print }
+  ' "$DESKTOP_DIR/$APP_NAME.desktop" > "$DESKTOP_DIR/$APP_NAME.desktop.tmp"
+  mv "$DESKTOP_DIR/$APP_NAME.desktop.tmp" "$DESKTOP_DIR/$APP_NAME.desktop"
+fi
+
+# Ensure action keeps --change with full wrapper path
+sed -i "s|^Exec=wallshuffle --change|Exec=$INSTALL_DIR/$APP_NAME --change|" "$DESKTOP_DIR/$APP_NAME.desktop"
+sed -i "s|^Exec=wallshuffle$|Exec=$INSTALL_DIR/$APP_NAME|" "$DESKTOP_DIR/$APP_NAME.desktop"
 
 # Ensure Icon line refers to the installed icon name
 sed -i "s|^Icon=.*|Icon=$APP_NAME|" "$DESKTOP_DIR/$APP_NAME.desktop"

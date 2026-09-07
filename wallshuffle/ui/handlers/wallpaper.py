@@ -7,7 +7,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GdkPixbuf, GLib, Gtk
 
-from ...constants import MultiMonitorMode
+from ...constants import WALLPAPER_CHANGE_TIMEOUT_SEC, MultiMonitorMode
 from ...core import WallpaperUpdateResult, change_wallpaper
 from ...gui_helpers import show_error_dialog
 from ...utils import CONFIG_DIR
@@ -114,13 +114,42 @@ class WallpaperHandlersMixin:
         self.on_save_clicked(widget, hide_window=False, skip_timer_setup=True)
 
         def change_and_update():
-            result, error_msg = change_wallpaper()
-            GLib.idle_add(self._handle_change_result, result, error_msg)
+            try:
+                result, error_msg = change_wallpaper()
+                GLib.idle_add(self._handle_change_result, result, error_msg)
+            except Exception as e:
+                logging.error(f"Error in change_and_update: {e}", exc_info=True)
+                GLib.idle_add(self._handle_change_result, WallpaperUpdateResult.FILE_SYSTEM_ERROR, str(e))
 
         try:
             self.btn_apply_now.set_sensitive(False)
             thread = threading.Thread(target=change_and_update, daemon=True)
             thread.start()
+
+            # Fase 1: watchdog via constante; re-enable y notifica
+            def _watchdog():
+                if thread.is_alive():
+                    logging.error(
+                        f"Watchdog after {WALLPAPER_CHANGE_TIMEOUT_SEC}s — thread hung (network/heavy image)."
+                    )
+                    GLib.idle_add(
+                        lambda: self.btn_apply_now.set_sensitive(True)
+                        if hasattr(self, "btn_apply_now")
+                        else None
+                    )
+                    try:
+                        from ...gui_helpers import show_error_dialog as _show
+
+                        GLib.idle_add(
+                            _show,
+                            f"Wallpaper change timed out after {WALLPAPER_CHANGE_TIMEOUT_SEC}s. Check network/folder.",
+                            self,
+                        )
+                    except Exception:
+                        pass
+                return False  # one-shot
+
+            GLib.timeout_add_seconds(WALLPAPER_CHANGE_TIMEOUT_SEC, _watchdog)
         except Exception as e:
             logging.critical(f"Error starting wallpaper change thread from GUI: {e}", exc_info=True)
             self.btn_apply_now.set_sensitive(True)  # Re-enable on thread start failure

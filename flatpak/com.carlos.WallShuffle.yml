@@ -8,20 +8,28 @@ finish-args:
   - --socket=x11
   - --socket=wayland
   - --share=network
-  - --filesystem=home
+  # Wallpaper sources: pictures + downloads; config/cache under xdg dirs
+  - --filesystem=xdg-pictures:ro
+  - --filesystem=xdg-download:ro
+  - --filesystem=xdg-config/wallshuffle:create
+  - --filesystem=xdg-cache/wallshuffle:create
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.freedesktop.portal.Desktop
+  # gsettings / desktop background (GNOME)
+  - --talk-name=ca.desrt.dconf
+  - --filesystem=xdg-run/dconf
+  - --env=DCONF_USER_CONFIG_DIR=.config/dconf
 
 modules:
   - name: python3-requests
     buildsystem: simple
     build-commands:
-      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} requests
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} "requests==2.31.0"
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb16791a27221474010a42ead94c03f15ad/requests-2.31.0.tar.gz
-        sha256: 942c5a30ed9f305f054775d3b2e7ef92271a9e144a6f79-TRUNCATED
+        url: https://files.pythonhosted.org/packages/9d/be/10918a2eac4ae9f02f6cfe6414b7a155ccd8f7f9d4380d62fd5b955065c3/requests-2.31.0.tar.gz
+        sha256: 942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1
 
   - name: python3-pillow
     buildsystem: simple
@@ -31,6 +39,7 @@ modules:
       - type: git
         url: https://github.com/python-pillow/Pillow.git
         tag: 10.0.0
+        commit: 6e28ed1f36d0eb74053af54e1eddc9c29db698cd
 
   - name: wallshuffle
     buildsystem: simple

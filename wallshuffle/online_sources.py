@@ -12,7 +12,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .constants import CACHE_EXPIRATION_HOURS
+from .constants import CACHE_EXPIRATION_HOURS, MAX_DOWNLOAD_BYTES, WALLPAPER_CHANGE_TIMEOUT_SEC
 from .utils import CACHE_DIR, CONFIG_DIR
 
 
@@ -54,12 +54,13 @@ class OnlineSourceManager:
         return session
 
     def _check_circuit_breaker(self):
-        """Check if we are in a cooldown period."""
+        """Check if we are in a cooldown period. Fase 1: monotonic evita NTP skew."""
         if OnlineSourceManager._consecutive_failures >= self.max_failures:
-            if OnlineSourceManager._last_failure_time:
-                elapsed = datetime.datetime.now() - OnlineSourceManager._last_failure_time
-                if elapsed < datetime.timedelta(minutes=self.cooldown_minutes):
-                    remaining = self.cooldown_minutes - (elapsed.total_seconds() / 60)
+            if OnlineSourceManager._last_failure_time is not None:
+                elapsed = time.monotonic() - OnlineSourceManager._last_failure_time
+                cooldown_sec = self.cooldown_minutes * 60
+                if elapsed < cooldown_sec:
+                    remaining = self.cooldown_minutes - (elapsed / 60)
                     logging.warning(f"Unsplash source is in cooldown. {remaining:.1f}m remaining.")
                     return False
                 else:
@@ -69,7 +70,8 @@ class OnlineSourceManager:
 
     def _record_failure(self):
         OnlineSourceManager._consecutive_failures += 1
-        OnlineSourceManager._last_failure_time = datetime.datetime.now()
+        # Fase 1: usa monotonic para evitar skew NTP (datetime.now vulnerable)
+        OnlineSourceManager._last_failure_time = time.monotonic()
         if OnlineSourceManager._consecutive_failures >= self.max_failures:
             logging.error(f"Unsplash source entered cooldown after {self.max_failures} failures.")
 
@@ -142,23 +144,70 @@ class OnlineSourceManager:
         encoded_keywords = quote_plus(keywords or "")
         url = f"https://api.unsplash.com/photos/random?query={encoded_keywords}&client_id={unsplash_api_key}"
         try:
-            # Use self.session instead of requests directly
-            response = self.session.get(url, timeout=10)
+            # Use (connect, read) tuple timeouts for stricter deadlines
+            response = self.session.get(url, timeout=(5, 10))
             response.raise_for_status()
             data = response.json()
             image_url = data["urls"]["full"]
 
             # Use self.session for image download too
-            image_response = self.session.get(image_url, stream=True, timeout=10)
+            image_response = self.session.get(image_url, stream=True, timeout=(5, 10))
             image_response.raise_for_status()
+
+            content_length = image_response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > MAX_DOWNLOAD_BYTES:
+                        error_msg = (
+                            f"Unsplash image exceeds maximum allowed size "
+                            f"({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)."
+                        )
+                        logging.error(error_msg)
+                        try:
+                            image_response.close()
+                        except Exception:
+                            pass
+                        return None, error_msg
+                except ValueError:
+                    logging.warning(f"Invalid Content-Length from Unsplash: {content_length}")
 
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             os.makedirs(temp_dir, mode=0o700, exist_ok=True)
             import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir) as f:
+
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir)
+            downloaded = 0
+            deadline = time.monotonic() + WALLPAPER_CHANGE_TIMEOUT_SEC  # Fase 1: budget via constante
+            try:
                 for chunk in image_response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                image_path = f.name
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"Unsplash image download exceeded {WALLPAPER_CHANGE_TIMEOUT_SEC}s deadline")
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_BYTES:
+                        raise ValueError(
+                            f"Unsplash download exceeded maximum allowed size "
+                            f"({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)"
+                        )
+                    tmp_file.write(chunk)
+                tmp_file.close()
+                image_path = tmp_file.name
+            except Exception:
+                try:
+                    tmp_file.close()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(tmp_file.name)
+                except OSError:
+                    pass
+                raise
+            finally:
+                try:
+                    image_response.close()
+                except Exception:
+                    pass
 
             self._save_image_file_to_cache(image_path, keywords, index)
 

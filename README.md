@@ -93,13 +93,15 @@ When you launch the application, you will be presented with the following option
 - **Local Folder:** If you choose this source, click "Browse..." to select the folder containing your images.
 - **Unsplash Keywords:** If you choose Unsplash, enter some keywords (e.g., "nature, landscapes") to guide the image selection.
 - **Display Mode:** Control how the image is displayed (e.g., Zoom, Scaled, Centered).
-- **Change Interval:** Set the number of minutes between automatic wallpaper changes. Set to 0 to disable automatic changes.
-- **Change wallpaper on startup:** Check this to have the wallpaper change shortly after you log in.
+- **Change Interval:** Minutes between automatic wallpaper changes. **Set to 0 to disable** automatic rotation.
+- **Also on login:** When automation is enabled (interval > 0), also trigger a change shortly after login (systemd `OnBootSec`).
 - **Random Order:** Toggle whether to display wallpapers in a random or sequential order.
 - **Image Effect:** Apply an optional visual effect to the wallpapers.
 - **Multi-Monitor Mode:** Choose how the wallpaper should be handled on multi-monitor setups.
 
-Click **Save** to apply your settings and start the timer. The main window will hide, but the application will continue running in the background if an interval is set.
+Click **Save** to apply your settings. If a tray icon is available, the window may hide and WallShuffle keeps running in the background. Without a tray, closing or Escape quits the app.
+
+**Scheduling:** Prefer **systemd --user** timers. On systems without systemd, Save installs a user **crontab** entry tagged `WALLSHUFFLE_TIMER` (interval mapped to valid cron syntax).
 
 ## 🚀 v1.0.0 Gold Master (Hardening Release)
 
@@ -117,14 +119,33 @@ The following critical features and deep security/stability fixes define the 'Go
 
 ## ⌨ Keyboard Shortcut
 
-Wallshuffle supports manual wallpaper change via the command line. You can use the AppImage directly to trigger a change.
+WallShuffle changes wallpaper on demand via a **one-shot CLI** (same entrypoint as the systemd timer). Bind a **single** system shortcut to:
 
-You can bind this command to a system keyboard shortcut:
+```bash
+wallshuffle --change
+```
 
-    /path/to/WallShuffle-x86_64.AppImage --change
+Prefer the installed wrapper on your PATH (typical after pip/editable install):
+
+```bash
+~/.local/bin/wallshuffle --change
+```
+
+Or the AppImage:
+
+```bash
+~/Applications/WallShuffle.AppImage --change
+```
+
+**Tips for reliability**
+
+- Use **only one** custom shortcut per key chord (e.g. Super+W). Duplicate bindings race and look “intermittent”.
+- Point the command at an executable that still exists (avoid old project paths like `…/wallshuffle.py` after refactors).
+- The desktop file also exposes a **Next Wallpaper** action (`wallshuffle --change`) you can pick when creating shortcuts on some desktops.
+- Success/failure is logged under `~/.config/wallshuffle/logs/wallshuffle.log` (`CLI --change requested` / `CLI wallpaper change finished successfully`).
 
 ### GNOME
-Settings → Keyboard → Custom Shortcuts
+Settings → Keyboard → Custom Shortcuts → add command `wallshuffle --change` (or the full path above) → assign Super+W (or any free chord).
 
 ### KDE
 System Settings → Shortcuts → Custom Shortcuts
@@ -134,7 +155,19 @@ Settings → Keyboard → Application Shortcuts
 
 ## Building from Source
 
-If you prefer to build the AppImage yourself:
+Scripts live under `scripts/`. From the repo root:
+
+```bash
+make setup          # venv + editable install
+make test           # pytest
+make lint           # ruff + mypy
+make build          # AppImage via scripts/build_appimage.sh
+./scripts/install.sh   # install AppImage wrapper (after build)
+./scripts/build_deb.sh # produce a .deb
+./scripts/uninstall.sh # remove install; --purge drops config
+```
+
+If you prefer to build the AppImage yourself step by step:
 
 1.  **Clone the repository:**
     ```bash

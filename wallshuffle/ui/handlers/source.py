@@ -7,6 +7,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 from ...constants import MultiMonitorMode, WallpaperSource
+from ...gui_helpers import wire_dialog_default
 from ...image_discovery import count_images_in_folder
 from ...online_sources import OnlineSourceManager
 
@@ -16,26 +17,40 @@ class SourceHandlersMixin:
         return count_images_in_folder(path, recursive)
 
     def update_image_count(self, path_override=None):
-        source = self.combo_source.get_active_text()
-        if source == WallpaperSource.LOCAL_FOLDER:
-            if path_override:
-                path = path_override
-            else:
-                cat_name = self.combo_folders.get_active_text()
-                path = self.folder_categories.get(cat_name) if cat_name else None
+        # Fase 1: debounce 300ms — evita N hilos concurrentes al cambiar rápido de categoría (I/O storm)
+        if hasattr(self, "_image_count_debounce_id") and self._image_count_debounce_id:
+            try:
+                GLib.source_remove(self._image_count_debounce_id)
+            except Exception:
+                pass
+            self._image_count_debounce_id = None
 
-            recursive = self.check_recursive.get_active()
-            if path and os.path.isdir(path):
-                # Run in thread to avoid freezing UI on large folders
-                def count_thread():
-                    count = self.count_local_images(path, recursive)
-                    GLib.idle_add(lambda: self.lbl_source_status.set_text(f"✓ {count} images found"))
+        def _do_update():
+            self._image_count_debounce_id = None
+            source = self.combo_source.get_active_text()
+            if source == WallpaperSource.LOCAL_FOLDER:
+                if path_override:
+                    path = path_override
+                else:
+                    cat_name = self.combo_folders.get_active_text()
+                    path = self.folder_categories.get(cat_name) if cat_name else None
 
-                threading.Thread(target=count_thread, daemon=True).start()
+                recursive = self.check_recursive.get_active()
+                if path and os.path.isdir(path):
+                    # Run in thread to avoid freezing UI on large folders
+                    def count_thread():
+                        count = self.count_local_images(path, recursive)
+                        GLib.idle_add(lambda: self.lbl_source_status.set_text(f"✓ {count} images found"))
+
+                    threading.Thread(target=count_thread, daemon=True).start()
+                else:
+                    self.lbl_source_status.set_text("⚠ Select a folder category")
             else:
-                self.lbl_source_status.set_text("⚠ Select a folder category")
-        else:
-            self.lbl_source_status.set_text("✓ Unsplash Source")
+                self.lbl_source_status.set_text("✓ Unsplash Source")
+            return False  # one-shot GLib timeout
+
+        # 300ms debounce
+        self._image_count_debounce_id = GLib.timeout_add(300, _do_update)
 
     def on_folder_changed(self, widget):
         # Now widget is a ComboBoxText
@@ -121,7 +136,7 @@ class SourceHandlersMixin:
         dialog_type = Gtk.MessageType.INFO if success else Gtk.MessageType.ERROR
         dialog = Gtk.MessageDialog(
             transient_for=self,
-            flags=0,
+            modal=True,
             message_type=dialog_type,
             buttons=Gtk.ButtonsType.OK,
             text="Connection Test Result",
@@ -132,4 +147,5 @@ class SourceHandlersMixin:
             d.destroy()
 
         dialog.connect("response", on_response)
-        dialog.show()
+        dialog.show_all()
+        wire_dialog_default(dialog, Gtk.ResponseType.OK)

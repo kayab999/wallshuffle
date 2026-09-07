@@ -26,6 +26,28 @@
   </screenshots>
   <url type="homepage">https://carlos.github.io/wallshuffle/</url>
   <releases>
+    <release version="1.0.2" date="2026-09-07">
+      <description>
+        <p>Hardening release — silent failures.</p>
+        <ul>
+          <li>Non-blocking locks with monotonic 5s (config/sequential/history)</li>
+          <li>Hard break after 10k images, debounce 300ms, tray guard, monitor cache 1s/0.5s</li>
+          <li>Unified WALLPAPER_CHANGE_TIMEOUT_SEC and monotonic circuit breaker</li>
+          <li>EXIF transpose, 51% coverage with app, 92 tests</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.1" date="2026-08-12">
+      <description>
+        <p>Stability and integration release.</p>
+        <ul>
+          <li>Reliable local symlink wallpapers and GNOME desktop cache</li>
+          <li>Hotkey/CLI --change hardening and desktop Next Wallpaper action</li>
+          <li>Timer enable based on interval; Escape/tray lifecycle fixes</li>
+          <li>MATE picture-filename, Unsplash download cap, install/uninstall polish</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-04-14">
       <description>
         <p>Official Gold Master release.</p>

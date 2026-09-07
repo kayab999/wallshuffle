@@ -10,3 +10,8 @@ Keywords=wallpaper;background;changer;shuffle;
 StartupNotify=true
 StartupWMClass=com.carlos.WallShuffle
 X-GNOME-Autostart-enabled=true
+Actions=NextWallpaper;
+
+[Desktop Action NextWallpaper]
+Name=Next Wallpaper
+Exec=wallshuffle --change

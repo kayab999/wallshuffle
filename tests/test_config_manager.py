@@ -126,6 +126,72 @@ def test_fallback_on_missing():
     print("✓ Fallback test passed")
 
 
+def test_folder_category_names_preserve_case():
+    """Folder category display names must keep original casing on save/load."""
+    import tempfile
+    from unittest.mock import patch
+
+    from wallshuffle.config_manager import ConfigManager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_file = Path(tmp) / "config.ini"
+        config_file.write_text("[Settings]\ntheme = Ubuntu\n")
+
+        with patch("wallshuffle.config_manager.CONFIG_FILE", str(config_file)):
+            with patch("wallshuffle.config_manager.CONFIG_DIR", str(tmp)):
+                cm = ConfigManager()
+                categories = {"Nature": "/tmp/nature", "Cars": "/tmp/cars"}
+                assert cm.save_categories(categories), "save_categories should succeed"
+
+                loaded = cm.load_settings()
+                assert loaded.has_section("FolderCategories")
+                options = dict(loaded.items("FolderCategories"))
+                assert "Nature" in options, f"Expected 'Nature' key, got: {list(options)}"
+                assert "Cars" in options, f"Expected 'Cars' key, got: {list(options)}"
+                assert options["Nature"] == "/tmp/nature"
+                assert options["Cars"] == "/tmp/cars"
+
+    print("✓ Folder category case preservation test passed")
+
+
+def test_lock_timeout_monotonic_raises():
+    """Fase 1: lock timeout debe elevar ConfigLockTimeoutError sin truncar archivo."""
+    import fcntl
+    import tempfile
+    import time
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from wallshuffle.config_manager import ConfigLockTimeoutError, ConfigManager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_file = Path(tmp) / "config.ini"
+        config_file.write_text("[Settings]\ntheme = Ubuntu\nsource = Local Folder\n")
+        orig_size = config_file.stat().st_size
+        with patch("wallshuffle.config_manager.CONFIG_FILE", str(config_file)):
+            with patch("wallshuffle.config_manager.CONFIG_DIR", str(tmp)):
+                cm = ConfigManager()
+                # Hold exclusive lock in another fd
+                with open(config_file, "r") as holder:
+                    fcntl.flock(holder, fcntl.LOCK_EX)
+                    start = time.monotonic()
+                    try:
+                        cm.load_settings()
+                        assert False, "Should have raised ConfigLockTimeoutError"
+                    except ConfigLockTimeoutError:
+                        elapsed = time.monotonic() - start
+                        assert 4.5 < elapsed < 6.5, f"Timeout should be ~5s, got {elapsed}"
+                    finally:
+                        fcntl.flock(holder, fcntl.LOCK_UN)
+                # File must not be truncated after timeout
+                assert config_file.stat().st_size == orig_size, "File truncated on timeout"
+                # After lock released, normal load succeeds
+                cfg = cm.load_settings()
+                assert cfg.get("Settings", "theme") == "Ubuntu"
+
+    print("✓ Lock timeout monotonic test passed")
+
+
 if __name__ == "__main__":
     print("Running ConfigManager Tests...\n")
 
@@ -135,6 +201,7 @@ if __name__ == "__main__":
         test_config_operations()
         test_type_casting()
         test_fallback_on_missing()
+        test_folder_category_names_preserve_case()
 
         print("\n" + "="*50)
         print("✅ All tests passed!")

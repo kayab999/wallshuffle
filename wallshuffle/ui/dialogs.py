@@ -1,7 +1,8 @@
+import os
 
 import gi
 
-from ..gui_helpers import show_error_dialog
+from ..gui_helpers import show_error_dialog, wire_dialog_default
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
@@ -9,7 +10,12 @@ from gi.repository import Gtk
 
 class ManageFoldersDialog(Gtk.Dialog):
     def __init__(self, parent, categories):
-        super().__init__(title="Manage Folder Sources", transient_for=parent, flags=0)
+        super().__init__(
+            title="Manage Folder Sources",
+            transient_for=parent,
+            modal=True,
+            destroy_with_parent=True,
+        )
         self.add_buttons(
             Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE
         )
@@ -61,6 +67,8 @@ class ManageFoldersDialog(Gtk.Dialog):
         box.pack_start(btn_add, False, False, 0)
 
         self.show_all()
+        # Enter / Space on Close; Escape also ends run() via DELETE_EVENT
+        wire_dialog_default(self, Gtk.ResponseType.CLOSE)
 
     def _add_row(self, name, path):
         row = Gtk.ListBoxRow()
@@ -101,46 +109,97 @@ class ManageFoldersDialog(Gtk.Dialog):
         row.show_all()
         self.listbox.add(row)
 
-    def on_add_clicked(self, widget):
+    def _choose_folder_path(self):
+        """Open a modal folder chooser. Returns selected path, or None if cancelled."""
         dialog = Gtk.FileChooserDialog(
             title="Select Folder",
-            parent=self,
+            transient_for=self,
             action=Gtk.FileChooserAction.SELECT_FOLDER,
+            modal=True,
         )
         dialog.add_buttons(
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OPEN, Gtk.ResponseType.OK,
         )
-
-        if dialog.run() == Gtk.ResponseType.OK:
-            path = dialog.get_filename()
+        wire_dialog_default(dialog, Gtk.ResponseType.OK)
+        try:
+            response = dialog.run()
+            if response != Gtk.ResponseType.OK:
+                return None
+            return dialog.get_filename()
+        finally:
             dialog.destroy()
 
-            # Ask for a name
-            name_dialog = Gtk.Dialog(title="Category Name", parent=self, flags=0)
-            name_dialog.add_buttons(Gtk.STOCK_OK, Gtk.ResponseType.OK, Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
-            content = name_dialog.get_content_area()
-            content.set_spacing(10)
-            content.set_margin_top(10)
-            content.set_margin_start(10)
-            content.set_margin_end(10)
-            entry = Gtk.Entry()
-            entry.set_placeholder_text("e.g., Nature, Cars")
-            content.pack_start(Gtk.Label(label="Enter a name for this folder:"), False, False, 0)
-            content.pack_start(entry, False, False, 0)
-            name_dialog.show_all()
+    def _ask_category_name(self, folder_path):
+        """
+        Prompt for a display name for the selected folder.
 
-            if name_dialog.run() == Gtk.ResponseType.OK:
-                name = entry.get_text().strip()
-                if name and name not in self.categories:
-                    self.categories[name] = path
-                    self._add_row(name, path)
-                    self.parent_window.save_folder_categories()
-                elif name in self.categories:
-                    show_error_dialog("A folder with that name already exists.", parent=self)
+        Returns:
+            str: stripped name when the user confirms
+            None: when the user cancels
+        """
+        name_dialog = Gtk.Dialog(
+            title="Category Name",
+            transient_for=self,
+            modal=True,
+            destroy_with_parent=True,
+        )
+        name_dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        )
+
+        content = name_dialog.get_content_area()
+        content.set_spacing(10)
+        content.set_margin_top(10)
+        content.set_margin_bottom(10)
+        content.set_margin_start(10)
+        content.set_margin_end(10)
+
+        prompt = Gtk.Label(label="Enter a name for this folder:")
+        prompt.set_halign(Gtk.Align.START)
+        content.pack_start(prompt, False, False, 0)
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("e.g., Nature, Cars")
+        suggested = os.path.basename(folder_path.rstrip(os.sep)) or folder_path
+        entry.set_text(suggested)
+        entry.select_region(0, -1)
+        content.pack_start(entry, False, False, 0)
+
+        name_dialog.show_all()
+        # Enter confirms (via default button + Entry activate fallback); Escape cancels.
+        wire_dialog_default(name_dialog, Gtk.ResponseType.OK, entry=entry)
+        entry.grab_focus()
+
+        try:
+            response = name_dialog.run()
+            if response != Gtk.ResponseType.OK:
+                return None
+            return entry.get_text().strip()
+        finally:
             name_dialog.destroy()
-        else:
-            dialog.destroy()
+
+    def on_add_clicked(self, widget):
+        path = self._choose_folder_path()
+        if not path:
+            return
+
+        name = self._ask_category_name(path)
+        if name is None:
+            return
+
+        if not name:
+            show_error_dialog("Please enter a name for this folder.", parent=self)
+            return
+
+        if name in self.categories:
+            show_error_dialog("A folder with that name already exists.", parent=self)
+            return
+
+        self.categories[name] = path
+        self._add_row(name, path)
+        self.parent_window.save_folder_categories()
 
     def on_remove_row_clicked(self, button, row, name):
         if name in self.categories:

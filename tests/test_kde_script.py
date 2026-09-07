@@ -18,19 +18,17 @@ class TestKDEScriptGeneration(unittest.TestCase):
         self.assertIn('d.writeConfig("FillMode"', script)
 
     def test_path_escaping(self):
-        """Verify dangerous paths are quoted correctly"""
-        # A path with single quotes or spaces could break the JS string if not shlex.quote'd
+        """Verify paths with spaces/quotes become valid percent-encoded file URIs in JS."""
         dangerous_path = "/home/user/My 'Cool' Wallpaper.jpg"
         script = self.manager._generate_kde_script(dangerous_path, "zoom")
 
-        # We assert that the filename is present but likely split up by escaping chars.
-        # Checking for the base filename parts is enough to verify it wasn't dropped.
-        self.assertIn("My ", script)
+        # Path.as_uri() encodes spaces and quotes for a safe JS string.
+        self.assertIn("file://", script)
+        self.assertIn("%20", script)
         self.assertIn("Cool", script)
         self.assertIn("Wallpaper.jpg", script)
-
-        # Also ensure the protocol prefix was added
-        self.assertIn("file://", script)
+        # Single quote should not appear raw inside the JS array string payload.
+        self.assertNotIn("My 'Cool'", script)
 
     def test_fill_mode_mapping(self):
         """Verify mapping of modes to KDE integers"""

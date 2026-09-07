@@ -19,6 +19,28 @@ class TestSystemIntegration(unittest.TestCase):
         written = write_call.kwargs.get("input") or (write_call.args[0] if write_call.args else "")
         self.assertIn("WALLSHUFFLE_TIMER", written)
         self.assertIn("/usr/bin/wallshuffle", written)
+        self.assertIn("*/30", written)
+
+    @patch("subprocess.run")
+    def test_setup_cron_fallback_hourly_for_large_interval(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        with patch("wallshuffle.system_integration._find_executable_for_timer", return_value="/usr/bin/wallshuffle"):
+            result = setup_cron_fallback(120, True, MagicMock())
+        self.assertTrue(result)
+        written = mock_run.call_args_list[-1].kwargs.get("input", "")
+        self.assertIn("0 */2 * * *", written)
+
+    @patch("subprocess.run")
+    def test_setup_cron_fallback_removes_when_interval_zero(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="*/30 * * * * wallshuffle --change # WALLSHUFFLE_TIMER\n",
+        )
+        with patch("wallshuffle.system_integration._find_executable_for_timer", return_value="/usr/bin/wallshuffle"):
+            result = setup_cron_fallback(0, False, MagicMock())
+        self.assertTrue(result)
+        written = mock_run.call_args_list[-1].kwargs.get("input", "")
+        self.assertNotIn("WALLSHUFFLE_TIMER", written)
 
 
 if __name__ == "__main__":

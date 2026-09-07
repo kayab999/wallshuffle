@@ -1,19 +1,24 @@
 import logging
 import os
+import subprocess
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-import subprocess
-
 from gi.repository import Gtk
 
 from ... import __version__
+from ...gui_helpers import wire_dialog_default
 
 
 class AboutHandlersMixin:
     def on_about_clicked(self, widget):
-        dialog = Gtk.Dialog(title="About WallShuffle", parent=self, flags=0)
+        dialog = Gtk.Dialog(
+            title="About WallShuffle",
+            transient_for=self,
+            modal=True,
+            destroy_with_parent=True,
+        )
         dialog.add_buttons(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
         dialog.set_default_size(650, 560)
 
@@ -60,13 +65,27 @@ class AboutHandlersMixin:
         textview.set_top_margin(8)
         textview.set_bottom_margin(8)
 
-        readme_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "README.md"))
-        try:
-            with open(readme_path, "r", encoding="utf-8") as f:
-                readme_content = f.read()
-            textview.get_buffer().set_text(readme_content)
-        except Exception as e:
-            textview.get_buffer().set_text(f"Could not load README.md: {e}")
+        # handlers/ -> ui/ -> wallshuffle/ -> package README, then project root
+        candidates = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "README.md")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "README.md")),
+        ]
+        readme_content = None
+        for readme_path in candidates:
+            try:
+                with open(readme_path, "r", encoding="utf-8") as f:
+                    readme_content = f.read()
+                break
+            except OSError:
+                continue
+        if readme_content is None:
+            readme_content = (
+                f"WallShuffle v{__version__}\n\n"
+                "A lightweight, privacy-first wallpaper manager for Linux.\n\n"
+                "Use wallshuffle --change for hotkeys and timers.\n"
+                "See https://github.com/kayab999/wallshuffle for full documentation."
+            )
+        textview.get_buffer().set_text(readme_content)
 
         scrolled_window.add(textview)
         content_area.pack_start(scrolled_window, True, True, 0)
@@ -104,6 +123,7 @@ class AboutHandlersMixin:
         content_area.pack_start(footer_box, False, False, 0)
 
         dialog.show_all()
+        wire_dialog_default(dialog, Gtk.ResponseType.CLOSE)
         dialog.run()
         dialog.destroy()
 

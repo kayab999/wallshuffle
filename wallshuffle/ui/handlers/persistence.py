@@ -61,10 +61,19 @@ class PersistenceHandlersMixin:
             settings_dict["custom_accent"] = get_hex(self.btn_custom_accent)
 
         if not self.config_manager.save_settings(self.config, settings_dict):
+            show_error_dialog(
+                "Could not save settings to disk. Check permissions on ~/.config/wallshuffle.",
+                parent=self,
+            )
             return
 
         # Refresh UI components after saving
-        self.load_settings()
+        try:
+            self.load_settings()
+        except TimeoutError as e:
+            # Fase 1: lock timeout — muestra dialog en vez de silencioso
+            logging.error(f"Config reload timeout after save: {e}")
+            show_error_dialog(f"Settings saved but config reload failed (file locked). Try again.\n\nDetails: {e}", parent=self)
         self.poll_timer_status()
 
         # Only run systemd setup when explicitly saving (not during auto-save for Next Wallpaper)

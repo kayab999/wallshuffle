@@ -5,3 +5,8 @@ Icon=wallshuffle
 Type=Application
 StartupWMClass=WallShuffle
 Categories=Utility;
+Actions=NextWallpaper;
+
+[Desktop Action NextWallpaper]
+Name=Next Wallpaper
+Exec=wallshuffle --change

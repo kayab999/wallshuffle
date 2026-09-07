@@ -67,5 +67,33 @@ class TestOnlineSourcesResilience(unittest.TestCase):
         # but mainly we verify logic flow didn't try to loop manually)
         self.assertEqual(self.manager.session.get.call_count, 1)
 
+    def test_circuit_breaker_monotonic(self):
+        """Fase 1: circuit breaker usa time.monotonic evita NTP skew y cuenta SSLError."""
+        import time
+        from unittest.mock import patch as mpatch
+
+        # Reset static state
+        OnlineSourceManager._consecutive_failures = 0
+        OnlineSourceManager._last_failure_time = None
+        mgr = self.manager
+        mgr.max_failures = 2
+        mgr.cooldown_minutes = 1
+        # Simulate 2 failures via monotonic
+        with mpatch("wallshuffle.online_sources.time.monotonic", return_value=1000.0):
+            mgr._record_failure()
+            mgr._record_failure()
+            self.assertEqual(OnlineSourceManager._consecutive_failures, 2)
+            self.assertEqual(OnlineSourceManager._last_failure_time, 1000.0)
+            # Within cooldown (30s elapsed) -> should block
+            with mpatch("wallshuffle.online_sources.time.monotonic", return_value=1030.0):
+                self.assertFalse(mgr._check_circuit_breaker())
+            # After cooldown (70s elapsed) -> should allow
+            with mpatch("wallshuffle.online_sources.time.monotonic", return_value=1070.0):
+                self.assertTrue(mgr._check_circuit_breaker())
+                self.assertEqual(OnlineSourceManager._consecutive_failures, 0)
+        # cleanup
+        OnlineSourceManager._consecutive_failures = 0
+        OnlineSourceManager._last_failure_time = None
+
 if __name__ == "__main__":
     unittest.main()

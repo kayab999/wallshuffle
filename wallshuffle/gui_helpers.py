@@ -6,7 +6,33 @@ import sys
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib
+from gi.repository import GLib, Gtk
+
+
+def wire_dialog_default(dialog, response_id, entry=None):
+    """
+    Make Enter activate a dialog response reliably.
+
+    set_default_response alone is not enough when focus is in a Gtk.Entry:
+    the target button must be can-default and the dialog default widget, and
+    the entry must set_activates_default(True). Also connect Entry "activate"
+    as a fallback so Enter always emits the intended response.
+    """
+    dialog.set_default_response(response_id)
+    button = dialog.get_widget_for_response(response_id)
+    if button is not None:
+        button.set_can_default(True)
+        dialog.set_default(button)
+
+    if entry is not None:
+        entry.set_activates_default(True)
+
+        def _on_entry_activate(_widget):
+            dialog.response(response_id)
+
+        entry.connect("activate", _on_entry_activate)
+
+    return button
 
 
 def show_error_dialog(message, parent=None):
@@ -20,24 +46,22 @@ def show_error_dialog(message, parent=None):
                 print(f"ERROR: {message}", file=sys.stderr)
                 return
 
-            gi.require_version("Gtk", "3.0")
-            from gi.repository import Gtk
-
             def _show():
                 dialog = Gtk.MessageDialog(
-                    parent=parent,
-                    flags=0,
+                    transient_for=parent,
+                    modal=True,
                     message_type=Gtk.MessageType.ERROR,
                     buttons=Gtk.ButtonsType.OK,
                     text="WallShuffle Error",
                 )
                 dialog.format_secondary_text(message)
+                dialog.show_all()
+                wire_dialog_default(dialog, Gtk.ResponseType.OK)
 
                 def on_response(d, res):
                     d.destroy()
 
                 dialog.connect("response", on_response)
-                dialog.show()
 
             GLib.idle_add(_show)
 

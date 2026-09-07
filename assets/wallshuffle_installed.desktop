@@ -4,3 +4,8 @@ Exec=wallshuffle
 Icon=wallshuffle
 Type=Application
 Categories=Utility;
+Actions=NextWallpaper;
+
+[Desktop Action NextWallpaper]
+Name=Next Wallpaper
+Exec=wallshuffle --change

@@ -1,13 +1,15 @@
 """GTK panel builders for the main settings window."""
 
+import logging
 
 import gi
 
 from .. import __version__
 from ..constants import WallpaperSource
 
+gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gdk, Gtk
 
 
 class WindowPanelsMixin:
@@ -31,11 +33,38 @@ class WindowPanelsMixin:
         self._build_source_section(main_vbox)
         self._build_settings_section(main_vbox)
 
+        # Keyboard shortcuts (window-level)
+        self._wire_window_keyboard_shortcuts()
+
         # Apply restrictions
         if not self.is_de_supported:
             self._apply_de_restrictions()
         if not self.is_systemd_available:
             self._apply_systemd_restrictions()
+
+    def _wire_window_keyboard_shortcuts(self):
+        """Ctrl+S saves; Escape hides to tray (same as window close)."""
+        accel = Gtk.AccelGroup()
+        self.add_accel_group(accel)
+
+        key, mods = Gtk.accelerator_parse("<Control>s")
+        if key:
+            self.btn_save.add_accelerator(
+                "clicked", accel, key, mods, Gtk.AccelFlags.VISIBLE
+            )
+
+        def _on_key_press(_widget, event):
+            if event.keyval != Gdk.KEY_Escape:
+                return False
+            # Match window-close behavior: quit if no tray, else hide to tray.
+            if self.app and not getattr(self.app, "tray_available", False):
+                logging.info("Escape pressed without tray; quitting application.")
+                self.app.quit()
+                return True
+            self.hide()
+            return True
+
+        self.connect("key-press-event", _on_key_press)
 
     def _build_header_bar(self):
         header = Gtk.HeaderBar()
@@ -45,8 +74,12 @@ class WindowPanelsMixin:
 
         self.btn_save = Gtk.Button(label="Save")
         self.btn_save.get_style_context().add_class("suggested-action")
+        self.btn_save.set_can_default(True)
+        self.btn_save.set_tooltip_text("Save settings (Ctrl+S)")
         self.btn_save.connect("clicked", self.on_save_clicked)
         header.pack_end(self.btn_save)
+        # Enter in text fields activates Save; Ctrl+S is wired in init_ui.
+        self.set_default(self.btn_save)
 
         self.btn_refresh = Gtk.Button()
         self.btn_refresh.set_image(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
@@ -179,12 +212,14 @@ class WindowPanelsMixin:
         self.entry_unsplash_api_key.set_visibility(False)
         self.entry_unsplash_api_key.set_placeholder_text("Unsplash Access Key")
         self.entry_unsplash_api_key.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
+        self.entry_unsplash_api_key.set_activates_default(True)
         self.entry_unsplash_api_key.connect("icon-press", self.on_api_key_visibility_toggle)
         self.entry_unsplash_api_key.connect("changed", self.validate_api_key)
 
         self.lbl_keywords = Gtk.Label(label="Keywords:")
         self.entry_keywords = Gtk.Entry()
         self.entry_keywords.set_placeholder_text("nature, architecture")
+        self.entry_keywords.set_activates_default(True)
 
         self.btn_test_unsplash = Gtk.Button(label="Test Connection")
         self.btn_test_unsplash.get_style_context().add_class("secondary-button")
@@ -202,6 +237,7 @@ class WindowPanelsMixin:
         self.entry_url = Gtk.Entry()
         self.entry_url.set_placeholder_text("https://example.com/wallpaper.jpg")
         self.entry_url.set_hexpand(True)
+        self.entry_url.set_activates_default(True)
         lbl_url = Gtk.Label(label="Image URL:")
         lbl_url.set_halign(Gtk.Align.START)
         def on_url_changed(widget):
@@ -288,12 +324,17 @@ class WindowPanelsMixin:
         hbox_auto = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         hbox_auto.pack_start(Gtk.Label(label="Every"), False, False, 0)
         self.spin_interval = Gtk.SpinButton()
-        self.spin_interval.set_adjustment(Gtk.Adjustment(value=30, lower=1, upper=10080, step_increment=1))
+        # 0 = automatic changes disabled; >0 enables the systemd/cron timer.
+        self.spin_interval.set_adjustment(Gtk.Adjustment(value=30, lower=0, upper=10080, step_increment=1))
         self.spin_interval.set_numeric(True)
+        self.spin_interval.set_tooltip_text("Minutes between wallpaper changes. Set to 0 to disable automatic rotation.")
         hbox_auto.pack_start(self.spin_interval, False, False, 0)
         hbox_auto.pack_start(Gtk.Label(label="mins"), False, False, 0)
         hbox_auto.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 10)
-        self.check_startup = Gtk.CheckButton(label="On Startup")
+        self.check_startup = Gtk.CheckButton(label="Also on login")
+        self.check_startup.set_tooltip_text(
+            "When automatic rotation is enabled (interval > 0), also trigger a change shortly after login."
+        )
         hbox_auto.pack_start(self.check_startup, False, False, 0)
         grid.attach(hbox_auto, 1, 2, 3, 1)
 
@@ -317,10 +358,18 @@ class WindowPanelsMixin:
         self.btn_apply_now.set_sensitive(False)
 
     def _apply_systemd_restrictions(self):
-        self.spin_interval.set_sensitive(False)
-        self.check_startup.set_sensitive(False)
-        self.spin_interval.set_tooltip_text("Disabled: systemd not found.")
-        self.check_startup.set_tooltip_text("Disabled: systemd not found.")
+        # Automation still works via cron fallback when systemd is missing.
+        # Keep controls enabled; only inform the user which backend is used.
+        self.spin_interval.set_tooltip_text(
+            "Minutes between changes (0 = off). Without systemd, WallShuffle uses a user crontab entry."
+        )
+        self.check_startup.set_tooltip_text(
+            "When automatic rotation is enabled, also trigger shortly after login "
+            "(cron @reboot is not used; enable after login by running the app once)."
+        )
+        if hasattr(self, "lbl_next_change"):
+            # Hint until first poll; polling will show "systemd not available" otherwise.
+            pass
 
     def _on_theme_event(self, spec):
         """Handle theme change event from the ThemeEngine."""

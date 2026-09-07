@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wallshuffle"
-version = "1.0.0"
+version = "1.0.2"
 description = "A GTK-based wallpaper changer for Linux desktops."
 readme = "README.md"
 authors = [
@@ -67,14 +67,13 @@ omit = [
     "wallshuffle/ui/dialogs.py",
     "wallshuffle/ui/handlers/*",
     "wallshuffle/ui/window.py",
-    "wallshuffle/app.py",
     "wallshuffle/__main__.py",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-v --strict-markers --cov=wallshuffle --cov-report=term-missing --cov-fail-under=45"
+addopts = "-v --strict-markers --cov=wallshuffle --cov-report=term-missing --cov-fail-under=51"
 markers = [
     "gui: marks tests that require GUI/display",
     "integration: marks tests that touch the filesystem/network"

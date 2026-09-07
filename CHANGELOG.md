@@ -1,5 +1,43 @@
 # Changelog - WallShuffle
 
+## [1.0.2] - 2026-09-07
+### Fixed — Fase 1 Hardening (Silent Failures)
+- **Config lock:** `ConfigLockTimeoutError` con `monotonic 5s` en `load_settings` — evita pérdida silenciosa, muestra `show_error_dialog` en GUI y `FILE_SYSTEM_ERROR` en headless (`config_manager.py`, `core.py`, `app.py`).
+- **Sequential/history locks:** Unifica `LOCK_SH/EX` no bloqueante `5s monotonic` en `sequential_state.py` y `utils.py` (evita hilos colgados timer+hotkey).
+- **I/O storm:** Hard break en `_scan_folder_once` tras `MAX_CACHED_IMAGES=10k` — no `stat` extra, evita asfixia NAS/directorios masivos (`image_index.py`).
+- **Thread leaks:** Debounce `300ms` en `update_image_count` (`ui/handlers/source.py`), guard `_tray_polling_in_progress` en tray (`app.py`), `get_monitor_info` cache `1s` + `event.wait 0.5s` vs `2.0s` (`wallpaper_manager.py`).
+- **Timeouts:** Usa `WALLPAPER_CHANGE_TIMEOUT_SEC=30` en 3 watchdogs (`app.py`, `core.py`, `ui/handlers/wallpaper.py`) + `time.monotonic` en circuit breaker (`online_sources.py`).
+- **Canvas/EXIF:** Cap `MAX_CANVAS_PIXELS=33M` con `BILINEAR` pre-scale (ya), + `ImageOps.exif_transpose` (`wallpaper_manager.py`, `effects.py`).
+
+### Tests & Coverage
+- Nuevos tests: `cap 33M`, `bilinear threshold`, `lock timeout monotonic`, `hard break 10k`, `history concurrent`, `circuit breaker monotonic`, `monitor cache`, `tray guard`.
+- `pyproject.toml` incluye `app.py` en coverage, `cov-fail-under 45→51` (51.08% actual, 92 tests).
+
+### Packaging
+- Version `1.0.2` en `pyproject.toml`, `setup.py`, `__init__.py`, `build_deb.sh`, metainfo.
+
+## [1.0.1] - 2026-08-12
+### Fixed
+- **Folder name dialog:** Keyboard input, Enter to confirm, modal focus for local folder sources.
+- **Symlink wallpapers:** Discover and apply images that are symlinks to real files (including extensionless link names); GNOME cache copies under `~/.cache/wallshuffle/desktop/`.
+- **Super+W / CLI:** Reliable `wallshuffle --change` (no forced X11); desktop action **Next Wallpaper**; clearer CLI logs.
+- **Automation timer:** Interval `0` disables auto-rotation; `interval > 0` enables systemd timer; “Also on login” only controls boot trigger.
+- **No-systemd systems:** Automation UI stays enabled and uses crontab fallback; uninstall removes `WALLSHUFFLE_TIMER` lines.
+- **Escape without tray:** Quits instead of hiding a held zombie process.
+- **Single-instance:** Unresponsive primary receives `QUIT` before rebind retry.
+- **Effects + multi-monitor:** Unique processed filenames so DIFFERENT monitors do not share one temp file.
+- **MATE:** Uses `picture-filename` (path) instead of GNOME `picture-uri`.
+- **XFCE:** Fails clearly when no `last-image` properties exist.
+- **Unsplash downloads:** Enforce the same max size cap as URL source.
+- **Sequential state:** Atomic temp+replace write (no truncate-before-lock).
+- **Install / deb:** Preserve Desktop Action `--change`; deb includes Next Wallpaper action.
+- **About dialog / Save errors:** Correct README lookup + fallback text; surface save failures.
+- **Folder index cache:** Refuse inconsistent partial caches; keep category name casing.
+
+### Packaging
+- Version **1.0.1** across package metadata, metainfo, and deb builder.
+- Flatpak manifest: real `requests` sha256, pinned Pillow commit, narrower filesystem permissions.
+
 ## [1.0.0] - 2026-05-08
 ### Hardening & Production Ready
 - **Concurrency Serialization:** Implemented exclusive file-based locking (`fcntl.flock`) in the core engine to eliminate race conditions between systemd and GUI.

@@ -1,12 +1,24 @@
 import os
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
+
+from PIL import Image
 
 from wallshuffle.core import WallpaperUpdateResult, change_wallpaper
 
 
 class TestHeadlessMode(unittest.TestCase):
     """Tests the application behavior in headless environments."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = self.temp_dir.name
+        self.image_path = os.path.join(self.folder, "img1.jpg")
+        Image.new("RGB", (64, 64), color="red").save(self.image_path)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
     @patch("wallshuffle.wallpaper_manager.subprocess.run")
     @patch("wallshuffle.config_manager.ConfigManager.load_settings")
@@ -16,65 +28,54 @@ class TestHeadlessMode(unittest.TestCase):
         Tests that change_wallpaper succeeds even if no DISPLAY is set,
         using the xrandr fallback and avoiding Gdk crashes.
         """
-        # 1. Setup headless environment
         env_patch = {
             "DISPLAY": "",
             "WAYLAND_DISPLAY": "",
-            "XDG_CURRENT_DESKTOP": "gnome"
+            "XDG_CURRENT_DESKTOP": "gnome",
         }
 
-        # 2. Mock configuration (Local Folder with one image)
         mock_config = MagicMock()
         settings_data = {
             "source": "Local Folder",
-            "folder": "/tmp/test_wallpapers",
+            "folder": self.folder,
             "mode": "zoom",
             "effect": "None",
-            "multi_monitor_mode": "Single image on all monitors"
+            "multi_monitor_mode": "Single image on all monitors",
+            "recursive_search": "False",
+            "random_order": "True",
         }
         mock_config.__contains__.side_effect = lambda key: key in ["Settings", "FolderCategories"]
         mock_config.__getitem__.side_effect = lambda key: settings_data if key == "Settings" else {}
-        mock_config.has_option.side_effect = lambda section, option: True
+        mock_config.has_option.side_effect = lambda section, option: option in settings_data
         mock_config.get.side_effect = lambda section, option, **kwargs: settings_data.get(option)
-        mock_config.getboolean.side_effect = lambda section, option: settings_data.get(option, False)
+        mock_config.getboolean.side_effect = lambda section, option: str(
+            settings_data.get(option, False)
+        ).lower() == "true"
         mock_load_settings.return_value = mock_config
 
-        # 3. Mock file system
-        def side_effect_isfile(path):
-            return path.endswith(".jpg")
-        def side_effect_isdir(path):
-            return not path.endswith(".jpg")
-        def side_effect_exists(path):
-            return True
+        def side_effect_which(tool):
+            if tool in ["xrandr", "gsettings"]:
+                return f"/usr/bin/{tool}"
+            return None
 
-        with patch("os.path.exists", side_effect=side_effect_exists), \
-             patch("os.path.isdir", side_effect=side_effect_isdir), \
-             patch("os.listdir", return_value=["img1.jpg"]), \
-             patch("os.path.isfile", side_effect=side_effect_isfile), \
-             patch("os.path.getsize", return_value=1024):
+        mock_which.side_effect = side_effect_which
+        mock_run.return_value = MagicMock(returncode=0, stdout="connected 1920x1080+0+0")
 
-            # 4. Mock tool availability (xrandr found, gsettings found)
-            def side_effect_which(tool):
-                if tool in ["xrandr", "gsettings"]:
-                    return f"/usr/bin/{tool}"
-                return None
-            mock_which.side_effect = side_effect_which
-
-            # 5. Mock subprocess for xrandr query and gsettings set
-            mock_run.return_value = MagicMock(returncode=0, stdout="connected 1920x1080+0+0")
-
-            # 6. Execute
-            with patch.dict(os.environ, env_patch, clear=False):
-                # Ensure no Gdk is imported/used or it's isolated
+        with patch.dict(os.environ, env_patch, clear=False):
+            # Avoid Gdk path when DISPLAY is empty: force headless monitor detection
+            with patch(
+                "wallshuffle.wallpaper_manager.WallpaperManager.get_monitor_info",
+                return_value=[{"name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080}],
+            ):
                 result, error_msg = change_wallpaper()
 
-            # 7. Verify
-            self.assertEqual(result, WallpaperUpdateResult.SUCCESS)
+        self.assertEqual(result, WallpaperUpdateResult.SUCCESS, error_msg)
 
-            # Check if gsettings was called (standard GNOME behavior)
-            # Find the call that sets the uri
-            gsettings_calls = [call for call in mock_run.call_args_list if "gsettings" in call.args[0]]
-            self.assertTrue(len(gsettings_calls) > 0, "gsettings should have been called to set wallpaper")
+        gsettings_calls = [
+            call for call in mock_run.call_args_list if call.args and "gsettings" in call.args[0]
+        ]
+        self.assertTrue(len(gsettings_calls) > 0, "gsettings should have been called to set wallpaper")
+
 
 if __name__ == "__main__":
     unittest.main()

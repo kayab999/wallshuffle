@@ -11,9 +11,34 @@ import fcntl
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, Optional, Type, TypeVar, overload
 
 from .utils import CONFIG_DIR, CONFIG_FILE
+
+# Timeout for file locks to avoid blocking GTK main thread (P0.2)
+_CONFIG_LOCK_TIMEOUT = 5.0
+_CONFIG_LOCK_POLL = 0.05
+
+
+class ConfigLockTimeoutError(TimeoutError):
+    """Raised when config file lock cannot be acquired within timeout. Fase 1: evita pérdida silenciosa."""
+
+    pass
+
+
+def _acquire_flock_with_timeout(file_obj, exclusive: bool, timeout: float = _CONFIG_LOCK_TIMEOUT) -> bool:
+    """Non-blocking flock with timeout using monotonic clock. Returns True if acquired."""
+    flags = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    flags |= fcntl.LOCK_NB
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            fcntl.flock(file_obj, flags)
+            return True
+        except (IOError, BlockingIOError, OSError):
+            time.sleep(_CONFIG_LOCK_POLL)
+    return False
 
 # Singleton instance and lock for thread-safe initialization
 _instance: Optional["ConfigManager"] = None
@@ -60,6 +85,18 @@ class ConfigManager:
         """Initialize the configuration manager and ensure config directory exists."""
         self._ensure_config_dir_exists()
 
+    @staticmethod
+    def _new_parser() -> configparser.ConfigParser:
+        """
+        Create a ConfigParser that preserves option name casing.
+
+        Default ConfigParser lowercases keys, which mangles FolderCategories
+        display names (e.g. "Nature" → "nature") on save/reload.
+        """
+        parser = configparser.ConfigParser()
+        parser.optionxform = str  # type: ignore[method-assign]
+        return parser
+
     def _ensure_config_dir_exists(self) -> None:
         """
         Create the configuration directory if it doesn't exist.
@@ -84,21 +121,33 @@ class ConfigManager:
         Returns:
             configparser.ConfigParser: Loaded configuration object.
 
+        Raises:
+            ConfigLockTimeoutError: If shared lock cannot be acquired within timeout.
+                Caller must show dialog headless vs GUI.
+
         Thread-Safety:
-            Uses shared file lock (LOCK_SH) to allow concurrent reads but prevent
-            writes during read operations.
+            Uses shared file lock (LOCK_SH) with timeout to avoid blocking GTK
+            main thread indefinitely (P0.2). Fase 1: raises on timeout instead of silent defaults.
         """
-        config = configparser.ConfigParser()
+        config = self._new_parser()
         try:
             if not os.path.exists(CONFIG_FILE):
                 self.create_default_config(config)
             else:
                 with open(CONFIG_FILE, "r") as f:
+                    acquired = _acquire_flock_with_timeout(f, exclusive=False)
+                    if not acquired:
+                        # Fase 1: no retorno silencioso — eleva excepción controlada
+                        msg = f"Timeout acquiring shared lock for {CONFIG_FILE} after {_CONFIG_LOCK_TIMEOUT}s"
+                        logging.error(msg)
+                        raise ConfigLockTimeoutError(msg)
                     try:
-                        fcntl.flock(f, fcntl.LOCK_SH)
                         config.read_file(f)
                     finally:
-                        fcntl.flock(f, fcntl.LOCK_UN)
+                        try:
+                            fcntl.flock(f, fcntl.LOCK_UN)
+                        except OSError:
+                            pass
 
                 # Legacy Migration: If "Settings.folder" exists but no "FolderCategories", migrate it.
                 if config.has_option("Settings", "folder") and not config.has_section("FolderCategories"):
@@ -109,7 +158,10 @@ class ConfigManager:
                         # We don't delete the old setting yet to maintain temporary backward compat,
                         # or we can just leave it as the 'default' selection.
 
-        except (configparser.Error, IOError) as e:
+        except ConfigLockTimeoutError:
+            # Fase 1: propaga timeout sin crear defaults silenciosos — caller decide UI vs headless
+            raise
+        except (configparser.Error, IOError, OSError, ValueError) as e:
             logging.error(f"Error reading config file {CONFIG_FILE}: {e}")
             self.create_default_config(config)
 
@@ -123,7 +175,7 @@ class ConfigManager:
             config: ConfigParser object to populate with defaults and write to disk.
 
         Thread-Safety:
-            Uses exclusive file lock (LOCK_EX) to prevent concurrent writes.
+            Uses exclusive file lock (LOCK_EX) with timeout to prevent concurrent writes.
         """
         config["Settings"] = {
             "dark_mode": "false",
@@ -132,13 +184,27 @@ class ConfigManager:
             "circuit_breaker_cooldown": "15"
         }
         try:
-            with open(CONFIG_FILE, "w") as configfile:
+            # Fase 1: evita truncar antes de lock — usa "a" para no truncar, luego truncate tras lock
+            with open(CONFIG_FILE, "a+") as configfile:
+                acquired = _acquire_flock_with_timeout(configfile, exclusive=True)
+                if not acquired:
+                    logging.error(f"Timeout acquiring exclusive lock for {CONFIG_FILE} — default config not persisted.")
+                    return
                 try:
-                    fcntl.flock(configfile, fcntl.LOCK_EX)
+                    configfile.seek(0)
+                    configfile.truncate()
                     config.write(configfile)
+                    configfile.flush()
+                    try:
+                        os.fsync(configfile.fileno())
+                    except OSError:
+                        pass
                 finally:
-                    fcntl.flock(configfile, fcntl.LOCK_UN)
-        except IOError as e:
+                    try:
+                        fcntl.flock(configfile, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        except (IOError, OSError) as e:
             logging.error(f"Error creating default config file {CONFIG_FILE}: {e}")
 
     def save_settings(
@@ -163,23 +229,30 @@ class ConfigManager:
             Uses exclusive file lock (LOCK_EX) to prevent concurrent writes.
         """
         try:
-            # Atomic Read-Modify-Write
-            # We open the file in 'r+' mode to allow both reading and writing with a single file descriptor and lock
-            # If the file doesn't exist, we fallback to 'w' (create) but that loses the atomicity of read-current-state.
-            # However, ensure_config_dir_exists and load_settings usually ensure existence.
-
-            # Using os.open to ensure it works even if file doesn't exist (handle creation)
+            # Ensure directory and file exist without race; atomic create if missing
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
             if not os.path.exists(CONFIG_FILE):
-                 open(CONFIG_FILE, 'w').close()
+                try:
+                    # Create empty file with restricted perms
+                    fd = os.open(CONFIG_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.close(fd)
+                except FileExistsError:
+                    pass
 
             with open(CONFIG_FILE, "r+") as configfile:
+                acquired = _acquire_flock_with_timeout(configfile, exclusive=True)
+                if not acquired:
+                    logging.error(f"Timeout acquiring exclusive lock for {CONFIG_FILE} after {_CONFIG_LOCK_TIMEOUT}s")
+                    return False
                 try:
-                    # Acquire Exclusive Lock immediately
-                    fcntl.flock(configfile, fcntl.LOCK_EX)
-
                     # 1. Read current state from disk
-                    disk_config = configparser.ConfigParser()
-                    disk_config.read_file(configfile)
+                    disk_config = self._new_parser()
+                    try:
+                        disk_config.read_file(configfile)
+                    except configparser.Error:
+                        # Corrupt file — start fresh but preserve what we can
+                        logging.warning(f"Config file {CONFIG_FILE} corrupted, recreating.")
+                        disk_config = self._new_parser()
 
                     if "Settings" not in disk_config:
                         disk_config["Settings"] = {}
@@ -196,11 +269,18 @@ class ConfigManager:
                     configfile.seek(0)
                     disk_config.write(configfile)
                     configfile.truncate() # Ensure we don't leave old tail data
-
+                    configfile.flush()
+                    try:
+                        os.fsync(configfile.fileno())
+                    except OSError:
+                        pass
                 finally:
-                    fcntl.flock(configfile, fcntl.LOCK_UN)
+                    try:
+                        fcntl.flock(configfile, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
             return True
-        except IOError as e:
+        except (IOError, OSError) as e:
             logging.error(f"Error writing config file {CONFIG_FILE}: {e}")
             return False
         except Exception as e:
@@ -276,16 +356,26 @@ class ConfigManager:
         Save folder categories to the config file with locking.
         """
         try:
-             # Atomic Read-Modify-Write
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
             if not os.path.exists(CONFIG_FILE):
-                 open(CONFIG_FILE, 'w').close()
+                try:
+                    fd = os.open(CONFIG_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.close(fd)
+                except FileExistsError:
+                    pass
 
             with open(CONFIG_FILE, "r+") as configfile:
+                acquired = _acquire_flock_with_timeout(configfile, exclusive=True)
+                if not acquired:
+                    logging.error(f"Timeout acquiring exclusive lock for categories save after {_CONFIG_LOCK_TIMEOUT}s")
+                    return False
                 try:
-                    fcntl.flock(configfile, fcntl.LOCK_EX)
-
-                    disk_config = configparser.ConfigParser()
-                    disk_config.read_file(configfile)
+                    disk_config = self._new_parser()
+                    try:
+                        disk_config.read_file(configfile)
+                    except configparser.Error:
+                        logging.warning(f"Config file {CONFIG_FILE} corrupted, recreating categories.")
+                        disk_config = self._new_parser()
 
                     if not disk_config.has_section("FolderCategories"):
                         disk_config.add_section("FolderCategories")
@@ -299,8 +389,16 @@ class ConfigManager:
                     configfile.seek(0)
                     disk_config.write(configfile)
                     configfile.truncate()
+                    configfile.flush()
+                    try:
+                        os.fsync(configfile.fileno())
+                    except OSError:
+                        pass
                 finally:
-                    fcntl.flock(configfile, fcntl.LOCK_UN)
+                    try:
+                        fcntl.flock(configfile, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
             return True
         except Exception as e:
             logging.error(f"Error saving categories: {e}")

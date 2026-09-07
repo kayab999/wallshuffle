@@ -2,7 +2,7 @@
 set -e
 
 APP_NAME="wallshuffle"
-VERSION="1.0.0"
+VERSION="1.0.2"
 ARCH="all"
 BUILD_DIR="build_deb"
 
@@ -44,6 +44,11 @@ Type=Application
 Categories=Utility;Settings;DesktopSettings;
 Terminal=false
 StartupNotify=true
+Actions=NextWallpaper;
+
+[Desktop Action NextWallpaper]
+Name=Next Wallpaper
+Exec=$APP_NAME --change
 EOF
 
 echo "Copying icon..."

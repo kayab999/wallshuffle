@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Optional
 
-from .constants import MAX_IPC_MESSAGE_BYTES
+from .constants import MAX_IPC_MESSAGE_BYTES, WALLPAPER_CHANGE_TIMEOUT_SEC
 
 
 class FrameLengthSocket:
@@ -107,19 +107,43 @@ class WallpaperApp(Gtk.Application):
 
         # Register cleanup handlers safely integrated with GLib main loop
         # This prevents GTK from hiding SystemExit exceptions and hanging on session logout
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._glib_signal_handler, signal.SIGTERM)
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._glib_signal_handler, signal.SIGTERM)  # noqa: F823
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)  # noqa: F823
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)  # noqa: F823
 
         self.logger.debug("Initializing ThemeEngine in WallpaperApp.__init__")
         self.config_manager = get_config_manager()
-        self.config = self.config_manager.load_settings()
+        # Fase 1: captura ConfigLockTimeoutError y muestra dialog en vez de defaults silenciosos
+        try:
+            self.config = self.config_manager.load_settings()
+        except TimeoutError as e:
+            # Timeout de lock — GUI muestra error, headless loguea y usa defaults temporales en memoria
+            logging.error(f"Config lock timeout in WallpaperApp.__init__: {e}")
+            try:
+                from gi.repository import GLib
+
+                GLib.idle_add(
+                    show_error_dialog,
+                    f"Config file is locked (another process changing wallpaper). Please try again in a few seconds.\n\nDetails: {e}",
+                    None,
+                )
+            except Exception:
+                pass
+            # Defaults temporales en memoria (no persisten) para no romper init
+            import configparser
+
+            self.config = configparser.ConfigParser()
+            self.config.optionxform = str  # type: ignore[method-assign]
+            self.config["Settings"] = {
+                "dark_mode": "false",
+                "max_cache_size_mb": "500",
+                "circuit_breaker_failures": "3",
+                "circuit_breaker_cooldown": "15",
+            }
         self.wallpaper_manager = WallpaperManager()
 
-        # Enforce application hold to prevent premature exit when window is hidden
-        # This is a safety measure in addition to the hold() in do_startup()
-        self.hold()
-        self.logger.debug("Application held in __init__ (Safety Hold)")
+        # Do not hold() here. Holding without a tray orphans the process when the
+        # window is hidden. hold() is applied in do_startup only if tray_available.
 
         # Schedule cache cleanup with configured limits
         max_cache_mb = self.config_manager.get_setting(self.config, "Settings", "max_cache_size_mb", 500, int)
@@ -167,6 +191,8 @@ class WallpaperApp(Gtk.Application):
             self.paused = not is_active
             self.logger.info(f"Systemd timer active: {is_active}. Setting paused state to: {self.paused}")
 
+            # Fase 1: guard para tray poll (evita leak si check tarda >30s)
+            self._tray_polling_in_progress = False
             # Start polling for external state changes
             GLib.timeout_add_seconds(30, self._poll_systemd_timer_state_tray)
         else:
@@ -175,11 +201,19 @@ class WallpaperApp(Gtk.Application):
     def _poll_systemd_timer_state_tray(self):
         if not self.is_systemd_available:
             return False
+        # Fase 1: guard no bloqueante — evita fugas de hilos si systemd tarda
+        if getattr(self, "_tray_polling_in_progress", False):
+            return True
 
         def _check():
-            is_active = self.wallpaper_manager.check_timer_active()
-            GLib.idle_add(self._update_paused_state, is_active)
+            try:
+                is_active = self.wallpaper_manager.check_timer_active()
+                GLib.idle_add(self._update_paused_state, is_active)
+            finally:
+                # liberar guard en main loop
+                GLib.idle_add(lambda: setattr(self, "_tray_polling_in_progress", False) or False)
 
+        self._tray_polling_in_progress = True
         threading.Thread(target=_check, daemon=True).start()
         return True
 
@@ -238,12 +272,19 @@ class WallpaperApp(Gtk.Application):
         """
         Initialize single instance mechanism using Abstract Unix Domain Socket.
         Returns True if we are the primary instance.
-        If another instance is running, tells it to QUIT and retries once.
+        If another instance is alive, wake it and exit. If unresponsive, send QUIT and retry.
         """
         max_attempts = 2
         for attempt in range(max_attempts):
-            self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
+                if self.server_socket:
+                    try:
+                        self.server_socket.close()
+                    except OSError:
+                        pass
+                    self.server_socket = None
+
+                self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 # Bind to abstract namespace (starts with null byte)
                 # This is automatically cleaned up by kernel when process dies
                 self.server_socket.bind(self.socket_name)
@@ -257,22 +298,21 @@ class WallpaperApp(Gtk.Application):
             except OSError as e:
                 if e.errno == errno.EADDRINUSE:
                     if attempt == 0:
-                        self.logger.info("Another instance is running. Activating it.")
+                        self.logger.info("Another instance is running. Probing it.")
                         try:
-                            # Try to see if it responds to STATUS
                             client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                            client_sock.settimeout(2.0)
+                            client_sock.settimeout(1.0)
                             client_sock.connect(self.socket_name)
 
                             frame_client = FrameLengthSocket(client_sock)
                             frame_client.send_message(b"STATUS")
-                            response = frame_client.receive_message()
+                            response = frame_client.receive_message(timeout=1.0)
                             client_sock.close()
 
                             if response == b"ALIVE":
                                 self.logger.info("Primary instance is ALIVE. Sending WAKEUP signal.")
                                 wake_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                                wake_sock.settimeout(2.0)
+                                wake_sock.settimeout(1.0)
                                 wake_sock.connect(self.socket_name)
 
                                 frame_wake = FrameLengthSocket(wake_sock)
@@ -281,24 +321,38 @@ class WallpaperApp(Gtk.Application):
 
                                 # Silent exit for secondary instance
                                 sys.exit(0)
-                            else:
-                                response_text = response.decode("utf-8", errors="replace") if response else "None"
-                                self.logger.warning(
-                                    f"Primary instance returned unexpected response: {response_text}. Assuming stale."
-                                )
-                        except (socket.timeout, ConnectionRefusedError):
-                            self.logger.warning("Primary instance is unresponsive (Timeout/Refused). It might be hung or stale.")
+
+                            response_text = response.decode("utf-8", errors="replace") if response else "None"
+                            self.logger.warning(
+                                f"Primary instance returned unexpected response: {response_text}. Sending QUIT."
+                            )
+                        except (socket.timeout, ConnectionRefusedError, OSError) as probe_error:
+                            self.logger.warning(
+                                f"Primary instance is unresponsive ({probe_error}). Sending QUIT and retrying bind."
+                            )
                         except Exception as e2:
                             self.logger.error(f"Failed to communicate with primary instance: {e2}")
 
-                        # In all 'except' cases or if not ALIVE, we retry binding in the next loop iteration.
+                        # Ask hung/stale owner to exit, then retry bind after a short grace period.
+                        try:
+                            quit_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                            quit_sock.settimeout(1.0)
+                            quit_sock.connect(self.socket_name)
+                            FrameLengthSocket(quit_sock).send_message(b"QUIT")
+                            quit_sock.close()
+                        except Exception as quit_error:
+                            self.logger.debug(f"Could not send QUIT to primary: {quit_error}")
+                        time.sleep(0.35)
                         continue
-                    else:
-                        self.logger.error("Still unable to bind socket after cleanup attempt. Another instance might be persistent.")
-                        return False
-                else:
-                    self.logger.error(f"Unexpected socket error: {e}")
+
+                    self.logger.error(
+                        "Still unable to bind single-instance socket after cleanup attempt. "
+                        "Another WallShuffle process may be hung — try: pkill -f wallshuffle"
+                    )
                     return False
+
+                self.logger.error(f"Unexpected socket error: {e}")
+                return False
         return False
 
     def _socket_listener(self):
@@ -606,6 +660,26 @@ class WallpaperApp(Gtk.Application):
 
             thread = threading.Thread(target=change_and_update, daemon=True)
             thread.start()
+
+            def _watchdog():
+                if thread.is_alive():
+                    # Fase 1: usa constante WALLPAPER_CHANGE_TIMEOUT_SEC
+                    self.logger.error(
+                        f"Tray watchdog after {WALLPAPER_CHANGE_TIMEOUT_SEC}s — thread hung, re-enabling menu."
+                    )
+                    GLib.idle_add(
+                        lambda: self.menu_item_next.set_sensitive(True)
+                        if hasattr(self, "menu_item_next")
+                        else None
+                    )
+                    GLib.idle_add(
+                        self._send_notification,
+                        "WallShuffle Error",
+                        f"Wallpaper change timed out after {WALLPAPER_CHANGE_TIMEOUT_SEC}s. Check network/folder.",
+                    )
+                return False
+
+            GLib.timeout_add_seconds(WALLPAPER_CHANGE_TIMEOUT_SEC, _watchdog)
         except Exception as e:
             self.logger.critical(f"Error starting wallpaper change thread from indicator: {e}", exc_info=True)
             if hasattr(self, "menu_item_next"):

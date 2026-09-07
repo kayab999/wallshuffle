@@ -3,10 +3,29 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.ini")
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle")
+
+# Fase 1: timeout monotónico 5s para flock no bloqueante (unifica con config_manager/sequential_state)
+_HISTORY_LOCK_TIMEOUT = 5.0
+_HISTORY_LOCK_POLL = 0.05
+
+
+def _acquire_flock_with_timeout(handle, exclusive: bool, timeout: float = _HISTORY_LOCK_TIMEOUT) -> bool:
+    """Intenta flock no bloqueante con timeout monotónico. Evita hilos colgados en history.log."""
+    flags = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    flags |= fcntl.LOCK_NB
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            fcntl.flock(handle, flags)
+            return True
+        except (IOError, BlockingIOError, OSError):
+            time.sleep(_HISTORY_LOCK_POLL)
+    return False
 
 
 
@@ -20,10 +39,13 @@ def log_wallpaper_history(image_path):
                 pass
 
         with open(history_file, "r+") as f:
+            # Fase 1: flock no bloqueante 5s monotónico — evita bloquear timer+hotkey concurrentes
+            if not _acquire_flock_with_timeout(f, exclusive=True):
+                logging.warning(
+                    f"Timeout acquiring exclusive lock for {history_file} after {_HISTORY_LOCK_TIMEOUT}s — skip history (will retry next change)"
+                )
+                return
             try:
-                # Acquire exclusive lock
-                fcntl.flock(f, fcntl.LOCK_EX)
-
                 content = f.read()
                 history = content.splitlines() if content else []
 
@@ -39,10 +61,16 @@ def log_wallpaper_history(image_path):
                 f.seek(0)
                 f.truncate()
                 f.write("\n".join(history))
-
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
             finally:
-                # Release lock
-                fcntl.flock(f, fcntl.LOCK_UN)
+                try:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except OSError:
+                    pass
 
     except IOError as e:
         logging.error(f"File I/O error while logging wallpaper history: {e}")
@@ -115,3 +143,20 @@ def escape_systemd_path(path):
     safe_path = safe_path.replace("$", "$$")
 
     return f'"{safe_path}"'
+
+
+def escape_systemd_working_dir(path):
+    """
+    Escapes a path for use in a systemd unit WorkingDirectory= setting.
+
+    Unlike ExecStart=, systemd does not strip double quotes from
+    WorkingDirectory=, so the path must NOT be wrapped in quotes. Only
+    specifier (%) and C-style backslash escapes are neutralized.
+    """
+    if not path:
+        return ""
+
+    safe_path = path.replace("\\", "\\\\")
+    safe_path = safe_path.replace("%", "%%")
+
+    return safe_path

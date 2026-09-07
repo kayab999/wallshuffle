@@ -5,13 +5,15 @@ import os
 import shutil
 import subprocess
 import threading
+import time
+from pathlib import Path
 from typing import Any, Dict, List, cast
 
 import gi
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Deferred imports for Gdk/GLib to avoid crashes in headless environments
-from .constants import GNOME_COMPAT
+from .constants import GNOME_COMPAT, MAX_CANVAS_PIXELS
 
 
 class WallpaperManager:
@@ -41,6 +43,9 @@ class WallpaperManager:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.desktop_environment = self.get_desktop_environment()
         self._check_system_dependencies()
+        # Fase 1: caché 1s para get_monitor_info (evita repetir GLib.idle_add+wait en ráfagas)
+        self._monitor_info_cache: tuple[float, List[Dict[str, Any]]] | None = None
+        self._monitor_cache_ttl = 1.0
 
     def _check_system_dependencies(self):
         """Verifies that critical system executables are available."""
@@ -214,12 +219,25 @@ class WallpaperManager:
             return False, msg
 
     def get_monitor_info(self) -> List[Dict[str, Any]]:
-        """Returns geometry for all detected monitors (Thread-Safe)."""
+        """Returns geometry for all detected monitors (Thread-Safe). Fase 1: 500ms timeout + 1s cache."""
+        # Fase 1: cache 1s — coalesce llamadas en ráfaga (Next + preview + stitch)
+        try:
+            if self._monitor_info_cache is not None:
+                ts, cached = self._monitor_info_cache
+                if time.monotonic() - ts < self._monitor_cache_ttl:
+                    return cached
+        except Exception:
+            pass
         # If we are already on the main thread, run directly
         if threading.current_thread() is threading.main_thread():
-            return self._get_monitor_info_main()
+            info = self._get_monitor_info_main()
+            try:
+                self._monitor_info_cache = (time.monotonic(), info)
+            except Exception:
+                pass
+            return info
 
-        # Otherwise, schedule on main thread and wait
+        # Otherwise, schedule on main thread and wait (Fase 1: 500ms vs 2.0s para no bloquear worker)
         result_container: Dict[str, Any] = {"info": []}
         event = threading.Event()
 
@@ -235,14 +253,30 @@ class WallpaperManager:
         try:
             from gi.repository import GLib
             GLib.idle_add(callback)
-            if not event.wait(timeout=2.0):
-                self.logger.warning("Timeout waiting for monitor info from main thread. Falling back to headless detection.")
-                return self._get_monitor_info_headless()
+            # Fase 1: timeout 500ms — blinda GTK MainLoop frente a compositing pesado
+            if not event.wait(timeout=0.5):
+                self.logger.warning("Timeout waiting for monitor info (0.5s) — fallback headless.")
+                info = self._get_monitor_info_headless()
+                try:
+                    self._monitor_info_cache = (time.monotonic(), info)
+                except Exception:
+                    pass
+                return info
         except ImportError:
             self.logger.warning("GLib/Gdk not available. Falling back to headless detection.")
-            return self._get_monitor_info_headless()
+            info = self._get_monitor_info_headless()
+            try:
+                self._monitor_info_cache = (time.monotonic(), info)
+            except Exception:
+                pass
+            return info
 
-        return cast(List[Dict[str, Any]], result_container["info"])
+        info = cast(List[Dict[str, Any]], result_container["info"])
+        try:
+            self._monitor_info_cache = (time.monotonic(), info)
+        except Exception:
+            pass
+        return info
 
     def _get_monitor_info_headless(self) -> List[Dict[str, Any]]:
         """Fallback monitor detection for headless mode (try xrandr, then /sys/class/drm)."""
@@ -341,6 +375,35 @@ class WallpaperManager:
             self.logger.error(f"Gdk monitor detection failed: {e}")
         return monitor_info
 
+    def _cap_canvas_size(self, width: int, height: int) -> tuple[int, int, float]:
+        """Cap canvas to MAX_CANVAS_PIXELS preserving aspect. Returns (w, h, scale). scale==1.0 means no cap."""
+        if width <= 0 or height <= 0:
+            return width, height, 1.0
+        pixels = width * height
+        if pixels <= MAX_CANVAS_PIXELS:
+            return width, height, 1.0
+        scale = (MAX_CANVAS_PIXELS / pixels) ** 0.5
+        new_w = max(1, int(width * scale))
+        new_h = max(1, int(height * scale))
+        self.logger.warning(
+            f"Canvas {width}x{height} ({pixels/1e6:.1f}MP) exceeds cap {MAX_CANVAS_PIXELS/1e6:.1f}MP. "
+            f"Downscaling to {new_w}x{new_h} ({scale:.2f}x) with BILINEAR to prevent OOM."
+        )
+        return new_w, new_h, scale
+
+    @staticmethod
+    def _downscale_for_canvas(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+        """Pre-downscale huge source images with BILINEAR before expensive LANCZOS, to save RAM/CPU."""
+        # If source is >2x target in either dimension, do a fast BILINEAR thumbnail first.
+        src_w, src_h = img.size
+        if src_w > target_w * 2 or src_h > target_h * 2:
+            # Work on a copy to avoid mutating original if Image is shared
+            img_copy = img.copy()
+            # Use BILINEAR for speed on large downscales; preserve aspect
+            img_copy.thumbnail((target_w * 2, target_h * 2), Image.Resampling.BILINEAR)
+            return img_copy
+        return img
+
     def create_composite_image(self, image_path, monitor_info):
         """Creates a single large image spanning all monitors."""
         if not monitor_info:
@@ -352,8 +415,18 @@ class WallpaperManager:
         if max_x == 0 or max_y == 0:
             return image_path
 
+        # Cap canvas to prevent OOM / swap thrashing (P0.1)
+        max_x, max_y, _ = self._cap_canvas_size(max_x, max_y)
+
         try:
             with Image.open(image_path) as original_img:
+                # Fase 3: corrige orientación EXIF antes de compositing
+                try:
+                    original_img = ImageOps.exif_transpose(original_img) or original_img
+                except Exception:
+                    pass
+                # Fast pre-downscale if source is massive
+                original_img = self._downscale_for_canvas(original_img, max_x, max_y)
                 target_aspect = max_x / max_y
                 original_aspect = original_img.width / original_img.height
 
@@ -399,6 +472,24 @@ class WallpaperManager:
             total_width = max_x - min_x
             total_height = max_y - min_y
 
+            # Cap canvas to prevent OOM (P0.1) — scale monitor layout proportionally
+            capped_w, capped_h, canvas_scale = self._cap_canvas_size(total_width, total_height)
+            if canvas_scale != 1.0:
+                # Scale monitor geometries to match capped canvas
+                scaled_monitor_info = []
+                for m in monitor_info:
+                    scaled_monitor_info.append({
+                        "name": m["name"],
+                        "width": max(1, int(m["width"] * canvas_scale)),
+                        "height": max(1, int(m["height"] * canvas_scale)),
+                        "x": int((m["x"] - min_x) * canvas_scale),
+                        "y": int((m["y"] - min_y) * canvas_scale),
+                    })
+                monitor_info = scaled_monitor_info
+                min_x = 0
+                min_y = 0
+                total_width, total_height = capped_w, capped_h
+
             # Create blank canvas
             canvas = Image.new("RGB", (total_width, total_height), (0, 0, 0))
 
@@ -410,6 +501,20 @@ class WallpaperManager:
                     with Image.open(img_path) as img:
                         target_w = monitor["width"]
                         target_h = monitor["height"]
+                        # Fase 3: corrige EXIF orientation
+                        try:
+                            img = ImageOps.exif_transpose(img) or img
+                        except Exception:
+                            pass
+
+                        # Fast BILINEAR pre-downscale for huge sources (saves RAM/CPU before LANCZOS)
+                        if mode in ("zoom", "scaled", "stretched", "spanned"):
+                            img = self._downscale_for_canvas(img, target_w, target_h)
+                        elif mode == "centered":
+                            # For centered, only downscale if image massively exceeds target
+                            # (avoid mutating semantics but prevent OOM on 50MP sources)
+                            if img.width > target_w * 3 or img.height > target_h * 3:
+                                img = self._downscale_for_canvas(img, target_w, target_h)
 
                         img_ratio = img.width / img.height
                         target_ratio = target_w / target_h
@@ -557,21 +662,51 @@ class WallpaperManager:
             self.logger.error(f"Stitching failed: {e}")
             return image_paths[0]
 
+    def _resolve_usable_image_path(self, path):
+        """
+        Return an absolute path to a readable regular image file.
+
+        Follows symlinks (wallpaper "hyperlink" folders). Returns None when the
+        path is missing, dangling, or not a regular file after resolution.
+        """
+        if not path:
+            return None
+        try:
+            if not os.path.isfile(path):
+                return None
+            resolved = os.path.realpath(path)
+            if not os.path.isfile(resolved):
+                return None
+            return resolved
+        except OSError as error:
+            self.logger.warning(f"Could not resolve image path '{path}': {error}")
+            return None
+
     def apply_desktop_settings(self, mode, image_paths=None, background_color=None):
         """Dispatcher for different DE implementations. Returns (success: bool, error_message: str)."""
         if not image_paths:
             return False, "No image paths provided."
 
-        # Validate image paths
+        # Validate image paths (accept symlink-to-file by resolving to realpath)
         valid_paths = []
         for p in image_paths:
-            if p and os.path.isfile(p):
-                valid_paths.append(os.path.abspath(p))
+            resolved = self._resolve_usable_image_path(p)
+            if resolved:
+                valid_paths.append(resolved)
             else:
-                self.logger.warning(f"Invalid image path ignored: {p}")
+                detail = ""
+                if p and os.path.islink(p):
+                    try:
+                        detail = f" (symlink -> {os.readlink(p)}, target missing or unreadable)"
+                    except OSError:
+                        detail = " (broken symlink)"
+                self.logger.warning(f"Invalid image path ignored: {p}{detail}")
 
         if not valid_paths:
-            error_msg = "No valid image paths provided."
+            error_msg = (
+                "No valid image paths provided. "
+                "If you use symlinks, ensure their targets exist and are mounted."
+            )
             self.logger.error(error_msg)
             return False, error_msg
 
@@ -642,52 +777,41 @@ class WallpaperManager:
             if not success:
                 return False, error_msg
 
-        # Image URI
-        # Copy to local cache to ensure accessibility (fixes issues with /mnt/ paths)
+        # Image URI: copy into an isolated desktop/ cache (do not purge Unsplash files).
         try:
-            cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle")
+            cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle", "desktop")
             os.makedirs(cache_dir, mode=0o700, exist_ok=True)
 
-            src = final_path
-            # Use a hash of the full path + extension to ensure uniqueness
-            path_hash = hashlib.sha256(src.encode()).hexdigest()[:12]
-            ext = os.path.splitext(src)[1]
+            src = self._resolve_usable_image_path(final_path) or final_path
+            # Content + path + mtime so same path with new bytes gets a new URI (GNOME refresh).
+            try:
+                st = os.stat(src)
+                identity = f"{src}:{st.st_mtime_ns}:{st.st_size}"
+            except OSError:
+                identity = f"{src}:{time.time()}"
+            path_hash = hashlib.sha256(identity.encode()).hexdigest()[:16]
+            ext = os.path.splitext(src)[1] or ".jpg"
             filename = f"wallpaper_{path_hash}{ext}"
-
             dst = os.path.join(cache_dir, filename)
 
-            # Purge ALL old cache entries before creating the new one.
-            # This prevents unbounded accumulation of cached wallpapers.
             try:
                 for old_entry in os.listdir(cache_dir):
                     old_path = os.path.join(cache_dir, old_entry)
-                    # Skip the destination if it already matches (avoid removing then re-creating)
                     if os.path.abspath(old_path) == os.path.abspath(dst):
                         continue
                     try:
                         if os.path.islink(old_path) or os.path.isfile(old_path):
                             os.remove(old_path)
-                            self.logger.debug(f"Purged old cache entry: {old_path}")
                     except OSError as e:
-                        self.logger.warning(f"Failed to remove old cache entry {old_path}: {e}")
+                        self.logger.warning(f"Failed to remove old desktop cache entry {old_path}: {e}")
             except OSError as e:
-                self.logger.warning(f"Failed to list cache directory for cleanup: {e}")
+                self.logger.warning(f"Failed to list desktop cache directory: {e}")
 
-            # Only copy (or symlink) if source and dest are different
             if os.path.abspath(src) != os.path.abspath(dst):
-                # Remove existing cache file/link if it exists
                 if os.path.exists(dst) or os.path.islink(dst):
                     os.remove(dst)
-
-                # Create a symbolic link instead of copying to save space (user requested "hyperlink")
-                try:
-                    os.symlink(src, dst)
-                    self.logger.info(f"Created symlink: {dst} -> {src}")
-                except OSError as e:
-                    self.logger.warning(f"Failed to create symlink ({e}), falling back to copy.")
-                    shutil.copy2(src, dst)
-                    self.logger.info(f"Cached image (copy) to: {dst}")
-
+                shutil.copy2(src, dst)
+                self.logger.info(f"Cached image (copy) to: {dst} from {src}")
                 local_path = dst
             else:
                 local_path = src
@@ -695,17 +819,36 @@ class WallpaperManager:
             self.logger.warning(f"Failed to cache image, using original path: {e}")
             local_path = final_path
 
-        uri = f"file://{local_path}"
+        resolved_path = str(Path(local_path).resolve())
+        uri = Path(resolved_path).as_uri()
+
+        # MATE uses a filesystem path key, not a file:// URI.
+        if self.desktop_environment == "mate":
+            path_ok, error_msg = self._run_subprocess(
+                ["gsettings", "set", schema, "picture-filename", resolved_path],
+                "set mate picture-filename",
+            )
+            if not path_ok:
+                self.logger.error(
+                    f"CRITICAL: Failed to set MATE wallpaper path via gsettings. Schema: {schema}. Error: {error_msg}"
+                )
+                return False, error_msg
+            return True, ""
+
+        # Force GNOME/Cinnamon to reload even if a previous URI was sticky.
+        self._run_subprocess(["gsettings", "set", schema, "picture-uri", "''"], "clear uri")
         uri_ok, error_msg = self._run_subprocess(["gsettings", "set", schema, "picture-uri", uri], "set uri")
         if not uri_ok:
             self.logger.error(f"CRITICAL: Failed to set wallpaper URI via gsettings. Schema: {schema}. Error: {error_msg}")
             return False, error_msg
 
-        # Also set dark mode URI if possible (for GNOME 42+)
         if schema == "org.gnome.desktop.background":
-             dark_ok, dark_error_msg = self._run_subprocess(["gsettings", "set", schema, "picture-uri-dark", uri], "set dark uri")
-             if not dark_ok:
-                 self.logger.warning(f"Failed to set dark-mode URI (non-fatal). Error: {dark_error_msg}")
+            self._run_subprocess(["gsettings", "set", schema, "picture-uri-dark", "''"], "clear dark uri")
+            dark_ok, dark_error_msg = self._run_subprocess(
+                ["gsettings", "set", schema, "picture-uri-dark", uri], "set dark uri"
+            )
+            if not dark_ok:
+                self.logger.warning(f"Failed to set dark-mode URI (non-fatal). Error: {dark_error_msg}")
 
         return True, ""
 
@@ -717,8 +860,10 @@ class WallpaperManager:
         if isinstance(image_paths, str):
             image_paths = [image_paths]
 
-        # Prepare js array of paths
-        js_paths_array = "[" + ", ".join([json.dumps(f"file://{p}") for p in image_paths]) + "]"
+        # Prepare js array of paths (percent-encoded file URIs)
+        js_paths_array = "[" + ", ".join(
+            [json.dumps(Path(p).resolve().as_uri()) for p in image_paths]
+        ) + "]"
 
         # Defensive script for Plasma (compatible with 5 and 6)
         return f"""
@@ -777,6 +922,14 @@ class WallpaperManager:
             image_props = [p for p in props if "last-image" in p]
             # Find all image-style properties
             style_props = [p for p in props if "image-style" in p]
+
+            if not image_props:
+                error_msg = (
+                    "No XFCE last-image properties found. "
+                    "Is xfce4-desktop configured for this session?"
+                )
+                self.logger.error(error_msg)
+                return False, error_msg
 
             # Sort them to hope they match monitor order (Monitor-0, Monitor-1...)
             # Standard generic sort usually handles monitor0, monitor1 fine.

@@ -10,6 +10,8 @@ def configure_backend():
     Detects the session type and forces X11 backend for GTK3 if running on Wayland.
     This fixes invisibility/positioning bugs on modern GNOME/KDE.
     Can be overridden by setting WALLSHUFFLE_FORCE_WAYLAND=1.
+
+    Only needed for the GUI. Headless --change must not force GDK_BACKEND.
     """
     if os.environ.get("WALLSHUFFLE_FORCE_WAYLAND") == "1":
         print("WALLSHUFFLE_FORCE_WAYLAND=1 detected. Not forcing X11 backend.", file=sys.stderr)
@@ -17,15 +19,9 @@ def configure_backend():
 
     session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
     if "wayland" in session_type:
-        # Check if we are forcing a specific backend via CLI args first
         if "GDK_BACKEND" not in os.environ:
             print("Wayland detected. Forcing X11 backend for GTK3 stability.", file=sys.stderr)
             os.environ["GDK_BACKEND"] = "x11"
-
-
-# Call this BEFORE importing any GTK/GDK modules
-configure_backend()
-
 
 
 from . import __version__
@@ -83,88 +79,98 @@ def setup_logging():
         logging.error("Failed to setup file logging", exc_info=True)
 
 
+def _run_change_wallpaper() -> int:
+    """Headless one-shot used by hotkeys, systemd timer, and CLI --change."""
+    logging.info(
+        "CLI --change requested (hotkey/timer/manual). "
+        f"DISPLAY={os.environ.get('DISPLAY')!r} "
+        f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY')!r} "
+        f"DBUS_SESSION_BUS_ADDRESS={'set' if os.environ.get('DBUS_SESSION_BUS_ADDRESS') else 'unset'} "
+        f"XDG_CURRENT_DESKTOP={os.environ.get('XDG_CURRENT_DESKTOP')!r}"
+    )
+
+    try:
+        from .core import WallpaperUpdateResult, change_wallpaper
+    except ImportError as e:
+        logging.critical(f"Failed to import core modules: {e}", exc_info=True)
+        return 1
+
+    result = change_wallpaper()
+
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    if result[0] != WallpaperUpdateResult.SUCCESS:
+        logging.error(f"CLI wallpaper change failed with status: {result[0].name}: {result[1]}")
+        return 1
+
+    logging.info("CLI wallpaper change finished successfully.")
+    return 0
+
+
 def main():
     try:
-        setup_logging()
-
+        # Parse early so --change never forces GDK_BACKEND / GUI bootstrap.
         parser = argparse.ArgumentParser(description=f"WallShuffle v{__version__} - A wallpaper changer for Linux desktops.")
-        parser.add_argument("--change", action="store_true", help="Change the wallpaper and exit.")
+        parser.add_argument(
+            "--change",
+            action="store_true",
+            help="Change the wallpaper once and exit (for system hotkeys and systemd timers).",
+        )
         parser.add_argument("--version", action="version", version=f"WallShuffle {__version__}")
         args = parser.parse_args()
 
+        setup_logging()
+
         if args.change:
-            # Debugging for keybinding/CLI issues
-            if os.environ.get("WALLSHUFFLE_DEBUG_CLI") == "1":
-                 logging.info(
-                     f"CLI Env: DISPLAY={os.environ.get('DISPLAY')}, "
-                     f"DBUS={os.environ.get('DBUS_SESSION_BUS_ADDRESS')}, "
-                     f"XDG={os.environ.get('XDG_CURRENT_DESKTOP')}"
-                 )
-
-            try:
-                from .core import WallpaperUpdateResult, change_wallpaper
-            except ImportError as e:
-                logging.critical(f"Failed to import core modules: {e}", exc_info=True)
-                sys.exit(1)
-
-            result = change_wallpaper()
-
-            # Flush logs to ensure they are written immediately
-            for handler in logging.getLogger().handlers:
-                handler.flush()
-
-            if result[0] != WallpaperUpdateResult.SUCCESS:
-                logging.error(f"CLI wallpaper change failed with status: {result[0].name}")
-                sys.exit(1)
-            else:
-                logging.info("CLI wallpaper change finished successfully.")
-                sys.exit(0)
-
-        else:
-            # Preliminary check for a valid graphical environment
-            display = os.environ.get("DISPLAY")
-            dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
-
-            if not display:
-                 logging.error("DISPLAY environment variable is not set. GUI cannot start.")
-                 print("ERROR: DISPLAY is not set. Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
-                 sys.exit(1)
-            try:
-                # Check if we can actually open the display
-                # This will raise an exception if the display is not available or invalid
-                import gi
-                gi.require_version("Gtk", "3.0")
-                from gi.repository import Gtk
-
-                # Check if we can actually open the display
-                if not Gtk.init_check()[0]:
-                     raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
-
-                logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}).")
-            except Exception as e:
-                logging.error(
-                    f"Failed to connect to graphical display (GTK initialization failed: {e}). "
-                    f"Context: DISPLAY={display}, DBUS={dbus}. "
-                    "Use 'wallshuffle --change' for headless wallpaper changes."
-                )
-                print(
-                    f"ERROR: Failed to connect to graphical display ({e}).\n"
-                    "Tip: Ensure your DISPLAY environment variable is set correctly, "
-                    "or use 'wallshuffle --change' to change wallpaper without a GUI.",
-                    file=sys.stderr
-                )
-                sys.exit(1)
-
-            try:
-                from .app import WallpaperApp
-            except ImportError as e:
-                logging.critical(f"Failed to import GUI modules: {e}", exc_info=True)
-                sys.exit(1)
-
-            app = WallpaperApp()
-            exit_code = app.run(sys.argv)
+            exit_code = _run_change_wallpaper()
             logging.shutdown()
             sys.exit(exit_code)
+
+        # GUI path only: force X11 on Wayland for GTK3 stability
+        configure_backend()
+
+        # Preliminary check for a valid graphical environment
+        display = os.environ.get("DISPLAY")
+        dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+
+        if not display:
+            logging.error("DISPLAY environment variable is not set. GUI cannot start.")
+            print("ERROR: DISPLAY is not set. Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
+            sys.exit(1)
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+
+            if not Gtk.init_check()[0]:
+                raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
+
+            logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}).")
+        except Exception as e:
+            logging.error(
+                f"Failed to connect to graphical display (GTK initialization failed: {e}). "
+                f"Context: DISPLAY={display}, DBUS={dbus}. "
+                "Use 'wallshuffle --change' for headless wallpaper changes."
+            )
+            print(
+                f"ERROR: Failed to connect to graphical display ({e}).\n"
+                "Tip: Ensure your DISPLAY environment variable is set correctly, "
+                "or use 'wallshuffle --change' to change wallpaper without a GUI.",
+                file=sys.stderr
+            )
+            sys.exit(1)
+
+        try:
+            from .app import WallpaperApp
+        except ImportError as e:
+            logging.critical(f"Failed to import GUI modules: {e}", exc_info=True)
+            sys.exit(1)
+
+        app = WallpaperApp()
+        exit_code = app.run(sys.argv)
+        logging.shutdown()
+        sys.exit(exit_code)
     except Exception as e:
         logging.critical("Unhandled exception in main application loop", exc_info=True)
         sys.stderr.write(f"CRITICAL ERROR: {e}\n")

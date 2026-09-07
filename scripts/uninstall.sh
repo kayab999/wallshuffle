@@ -34,6 +34,14 @@ rm -f "$HOME/.config/systemd/user/wallpaper-changer.timer"
 # Reload daemon to reflect changes
 systemctl --user daemon-reload 2>/dev/null || true
 
+# Remove cron fallback entry if present
+if command -v crontab >/dev/null 2>&1; then
+  echo "Removing crontab WALLSHUFFLE_TIMER entry (if any)..."
+  if crontab -l 2>/dev/null | grep -q "WALLSHUFFLE_TIMER"; then
+    crontab -l 2>/dev/null | grep -v "WALLSHUFFLE_TIMER" | crontab - 2>/dev/null || true
+  fi
+fi
+
 echo "Removing binaries, wrappers, and icons..."
 # Wrapper
 rm -f "$HOME/.local/bin/wallshuffle"
