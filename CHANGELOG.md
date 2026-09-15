@@ -1,10 +1,6 @@
 # Changelog - WallShuffle
 
-## [Unreleased]
-### Changed
-- Public identity aligned with GitHub (`kayab999/wallshuffle`): application id `io.github.kayab999.WallShuffle`, Kayab Software metadata, no in-repo user config or editor settings.
-
-## [1.0.2] - 2026-09-07
+## [1.0.2] - 2026-09-15
 ### Fixed — Fase 1 Hardening (Silent Failures)
 - **Config lock:** `ConfigLockTimeoutError` con `monotonic 5s` en `load_settings` — evita pérdida silenciosa, muestra `show_error_dialog` en GUI y `FILE_SYSTEM_ERROR` en headless (`config_manager.py`, `core.py`, `app.py`).
 - **Sequential/history locks:** Unifica `LOCK_SH/EX` no bloqueante `5s monotonic` en `sequential_state.py` y `utils.py` (evita hilos colgados timer+hotkey).
@@ -19,6 +15,8 @@
 
 ### Packaging
 - Version `1.0.2` en `pyproject.toml`, `setup.py`, `__init__.py`, `build_deb.sh`, metainfo.
+- Public identity aligned with GitHub (`kayab999/wallshuffle`): application id `io.github.kayab999.WallShuffle`, Kayab Software metadata, no in-repo user config or editor settings.
+- Binary GitHub release: `wallshuffle_1.0.2_all.deb` and `WallShuffle-1.0.2-x86_64.AppImage`.
 
 ## [1.0.1] - 2026-08-12
 ### Fixed

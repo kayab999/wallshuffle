@@ -1,4 +1,4 @@
-.PHONY: install setup test lint clean build
+.PHONY: install setup test lint clean build deb release
 
 VENV = .venv
 PYTHON = $(VENV)/bin/python
@@ -39,3 +39,8 @@ clean:
 
 build:
 	./scripts/build_appimage.sh
+
+deb:
+	./scripts/build_deb.sh
+
+release: deb build
