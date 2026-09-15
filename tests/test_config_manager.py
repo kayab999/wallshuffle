@@ -4,13 +4,24 @@ Tests for ConfigManager singleton pattern and thread-safety.
 
 import configparser
 import sys
+import tempfile
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from wallshuffle.config_manager import get_config_manager
+from wallshuffle.config_manager import ConfigManager, get_config_manager
+
+
+def _isolated_config(tmp: str):
+    """Point ConfigManager at a temp dir so tests never touch ~/.config/wallshuffle."""
+    config_file = str(Path(tmp) / "config.ini")
+    return (
+        patch("wallshuffle.config_manager.CONFIG_DIR", tmp),
+        patch("wallshuffle.config_manager.CONFIG_FILE", config_file),
+    )
 
 
 def test_singleton_returns_same_instance():
@@ -48,80 +59,89 @@ def test_singleton_thread_safety():
 
 def test_config_operations():
     """Test basic config operations work with singleton."""
-    cm = get_config_manager()
+    with tempfile.TemporaryDirectory() as tmp:
+        dir_patch, file_patch = _isolated_config(tmp)
+        with dir_patch, file_patch:
+            cm = ConfigManager()
 
-    # Load config
-    config = cm.load_settings()
-    assert isinstance(config, configparser.ConfigParser), "Should return ConfigParser"
+            # Load config
+            config = cm.load_settings()
+            assert isinstance(config, configparser.ConfigParser), "Should return ConfigParser"
 
-    # Test get_setting
-    value = cm.get_setting(config, "Settings", "dark_mode", "false")
-    assert value in ["true", "false"], f"dark_mode should be boolean string, got: {value}"
+            # Test get_setting
+            value = cm.get_setting(config, "Settings", "dark_mode", "false")
+            assert value in ["true", "false"], f"dark_mode should be boolean string, got: {value}"
 
-    # Test save_settings
-    test_settings = {"test_key": "test_value"}
-    success = cm.save_settings(config, test_settings)
-    assert success, "save_settings should succeed"
+            # Test save_settings
+            test_settings = {"test_key": "test_value"}
+            success = cm.save_settings(config, test_settings)
+            assert success, "save_settings should succeed"
 
-    # Reload and verify
-    config2 = cm.load_settings()
-    retrieved = cm.get_setting(config2, "Settings", "test_key", None)
-    assert retrieved == "test_value", f"Expected 'test_value', got: {retrieved}"
+            # Reload and verify
+            config2 = cm.load_settings()
+            retrieved = cm.get_setting(config2, "Settings", "test_key", None)
+            assert retrieved == "test_value", f"Expected 'test_value', got: {retrieved}"
 
     print("✓ Config operations test passed")
 
 
 def test_type_casting():
     """Test that get_setting properly casts types."""
-    cm = get_config_manager()
-    config = cm.load_settings()
+    with tempfile.TemporaryDirectory() as tmp:
+        dir_patch, file_patch = _isolated_config(tmp)
+        with dir_patch, file_patch:
+            cm = ConfigManager()
+            config = cm.load_settings()
 
-    # Save test values
-    cm.save_settings(config, {
-        "int_test": "42",
-        "bool_test": "true",
-        "float_test": "3.14",
-        "list_test": "a, b, c",
-    })
+            # Save test values
+            cm.save_settings(config, {
+                "int_test": "42",
+                "bool_test": "true",
+                "float_test": "3.14",
+                "list_test": "a, b, c",
+            })
 
-    # Reload
-    config = cm.load_settings()
+            # Reload
+            config = cm.load_settings()
 
-    # Test int casting
-    int_val = cm.get_setting(config, "Settings", "int_test", 0, value_type=int)
-    assert int_val == 42, f"Expected 42, got {int_val}"
-    assert isinstance(int_val, int), "Should be int type"
+            # Test int casting
+            int_val = cm.get_setting(config, "Settings", "int_test", 0, value_type=int)
+            assert int_val == 42, f"Expected 42, got {int_val}"
+            assert isinstance(int_val, int), "Should be int type"
 
-    # Test bool casting
-    bool_val = cm.get_setting(config, "Settings", "bool_test", False, value_type=bool)
-    assert bool_val is True, f"Expected True, got {bool_val}"
-    assert isinstance(bool_val, bool), "Should be bool type"
+            # Test bool casting
+            bool_val = cm.get_setting(config, "Settings", "bool_test", False, value_type=bool)
+            assert bool_val is True, f"Expected True, got {bool_val}"
+            assert isinstance(bool_val, bool), "Should be bool type"
 
-    # Test float casting
-    float_val = cm.get_setting(config, "Settings", "float_test", 0.0, value_type=float)
-    assert abs(float_val - 3.14) < 0.001, f"Expected 3.14, got {float_val}"
-    assert isinstance(float_val, float), "Should be float type"
+            # Test float casting
+            float_val = cm.get_setting(config, "Settings", "float_test", 0.0, value_type=float)
+            assert abs(float_val - 3.14) < 0.001, f"Expected 3.14, got {float_val}"
+            assert isinstance(float_val, float), "Should be float type"
 
-    # Test list casting
-    list_val = cm.get_setting(config, "Settings", "list_test", [], value_type=list)
-    assert list_val == ["a", "b", "c"], f"Expected ['a', 'b', 'c'], got {list_val}"
-    assert isinstance(list_val, list), "Should be list type"
+            # Test list casting
+            list_val = cm.get_setting(config, "Settings", "list_test", [], value_type=list)
+            assert list_val == ["a", "b", "c"], f"Expected ['a', 'b', 'c'], got {list_val}"
+            assert isinstance(list_val, list), "Should be list type"
 
     print("✓ Type casting test passed")
 
 
 def test_fallback_on_missing():
     """Test that fallback values are returned when keys don't exist."""
-    cm = get_config_manager()
-    config = cm.load_settings()
+    with tempfile.TemporaryDirectory() as tmp:
+        dir_patch, file_patch = _isolated_config(tmp)
+        with dir_patch, file_patch:
+            cm = ConfigManager()
+            config = cm.load_settings()
 
-    # Test with non-existent key
-    value = cm.get_setting(config, "Settings", "nonexistent_key", "default_value")
-    assert value == "default_value", f"Expected fallback, got: {value}"
+            # Test with non-existent key
+            value = cm.get_setting(config, "Settings", "nonexistent_key", "default_value")
+            assert value == "default_value", f"Expected fallback, got: {value}"
 
-    # Test with int fallback
-    int_val = cm.get_setting(config, "Settings", "nonexistent_int", 99, value_type=int)
-    assert int_val == 99, f"Expected 99, got: {int_val}"
+            # Test with int fallback
+            int_val = cm.get_setting(config, "Settings", "nonexistent_int", 99, value_type=int)
+            assert int_val == 99, f"Expected 99, got: {int_val}"
 
     print("✓ Fallback test passed")
 
@@ -177,7 +197,7 @@ def test_lock_timeout_monotonic_raises():
                     start = time.monotonic()
                     try:
                         cm.load_settings()
-                        assert False, "Should have raised ConfigLockTimeoutError"
+                        raise AssertionError("Should have raised ConfigLockTimeoutError")
                     except ConfigLockTimeoutError:
                         elapsed = time.monotonic() - start
                         assert 4.5 < elapsed < 6.5, f"Timeout should be ~5s, got {elapsed}"

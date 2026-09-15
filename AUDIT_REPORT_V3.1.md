@@ -19,7 +19,7 @@
 | **Usuarios objetivo** | No técnicos (primario) / Técnicos (secundario) |
 | **Plataformas soportadas** | Linux (Ubuntu 22.04+, Debian 12+, Fedora, Arch; GNOME/Unity/Cinnamon/Budgie/MATE/KDE/XFCE; X11 / XWayland) |
 | **Stack** | Python 3.10-3.12, PyGObject (GTK 3, GdkPixbuf, Ayatana/AppIndicator3), Pillow, requests/urllib3 Retry, systemd --user, cron, GSettings/dconf, dbus-send, xfconf-query |
-| **Modo distribución** | AppImage (`scripts/build_appimage.sh`), Flatpak (`flatpak/com.carlos.WallShuffle.yml`), .deb (`scripts/build_deb.sh`), Source (`pip install -e .`) |
+| **Modo distribución** | AppImage (`scripts/build_appimage.sh`), Flatpak (`flatpak/io.github.kayab999.WallShuffle.yml`), .deb (`scripts/build_deb.sh`), Source (`pip install -e .`) |
 | **Contexto ejecución principal** | GUI interactivo (Gtk.Application) + Headless `wallshuffle --change` (hotkey/systemd timer) + Background polling (5s foco /30s fondo /30s tray) |
 | **Requisitos compliance** | Ninguno regulado · Local-first, zero-telemetry (GDPR minimal) · WCAG no evaluado formalmente |
 
@@ -54,7 +54,7 @@ Determinar si WallShuffle está listo para: uso real no ideal, distribución pú
 
 | Aspecto | Evidencia |
 |---|---|
-| Patrón | `Gtk.Application` `application_id="com.carlos.WallShuffle"` (`wallshuffle/app.py:94`) |
+| Patrón | `Gtk.Application` `application_id="io.github.kayab999.WallShuffle"` (`wallshuffle/app.py`) |
 | SRP | Capas: `core` orquesta, `wallpaper_manager` aplica DE, `online_sources` fetcha, `effects` Pillow, `system_integration` timer/cron, `config_manager` singleton, `theme_engine` (engine/backend/renderer/resolver/validator/store/events/spec), `ui/window/panels/handlers/*` |
 | Contratos | `WallpaperUpdateResult` 8 estados (`wallshuffle/core.py:28-37`), `(Tuple[str,WallpaperUpdateResult])` + `(bool,str)` en `wallpaper_manager._run_subprocess:185` |
 | Testabilidad | `constants.MAX_CANVAS_PIXELS=33_554_432` / `MAX_CACHED_IMAGES=10_000` (`wallshuffle/constants.py:10-12`) — cap testeable vs hardcode previo |

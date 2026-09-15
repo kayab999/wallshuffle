@@ -68,7 +68,9 @@ flowchart TD
 
 ## Configuration
 
-Stored in `~/.config/wallshuffle/config.ini` (mode `0700`). Folder categories live in a `[FolderCategories]` section. Sequential rotation state is stored separately in `sequential_state.json`.
+Stored in `~/.config/wallshuffle/config.ini` (mode `0700`). The repository does not ship a filled-in user config. Folder categories live in a `[FolderCategories]` section. Sequential rotation state is stored separately in `sequential_state.json`.
+
+Gtk.Application / Flatpak / AppStream id: `io.github.kayab999.WallShuffle`.
 
 ## Packaging
 

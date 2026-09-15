@@ -62,7 +62,7 @@ Section: utils
 Priority: optional
 Architecture: $ARCH
 Depends: python3, python3-gi, python3-pil, python3-requests, gir1.2-gtk-3.0, gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1
-Maintainer: Carlos <carlos@example.com>
+Maintainer: Kayab Software <kayab999@users.noreply.github.com>
 Description: A GTK-based wallpaper changer for Linux desktops.
  WallShuffle allows you to automatically rotate wallpapers from a local folder
  or Unsplash. It supports multiple monitors, effects, and dynamic theming.

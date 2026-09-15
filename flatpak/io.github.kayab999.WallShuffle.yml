@@ -1,4 +1,4 @@
-app-id: com.carlos.WallShuffle
+app-id: io.github.kayab999.WallShuffle
 runtime: org.gnome.Platform
 runtime-version: '45'
 sdk: org.gnome.Sdk
@@ -45,9 +45,9 @@ modules:
     buildsystem: simple
     build-commands:
       - pip3 install --prefix=${FLATPAK_DEST} .
-      - install -Dm644 data/com.carlos.WallShuffle.desktop ${FLATPAK_DEST}/share/applications/com.carlos.WallShuffle.desktop
-      - install -Dm644 data/com.carlos.WallShuffle.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.carlos.WallShuffle.metainfo.xml
-      - install -Dm644 assets/icon.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/com.carlos.WallShuffle.png
+      - install -Dm644 data/io.github.kayab999.WallShuffle.desktop ${FLATPAK_DEST}/share/applications/io.github.kayab999.WallShuffle.desktop
+      - install -Dm644 data/io.github.kayab999.WallShuffle.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.kayab999.WallShuffle.metainfo.xml
+      - install -Dm644 assets/icon.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/io.github.kayab999.WallShuffle.png
     sources:
       - type: dir
         path: ..

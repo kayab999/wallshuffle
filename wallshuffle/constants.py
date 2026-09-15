@@ -1,5 +1,8 @@
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 
+# Reverse-DNS id for Gtk.Application, desktop files, Flatpak, and AppStream.
+APPLICATION_ID = "io.github.kayab999.WallShuffle"
+
 CACHE_EXPIRATION_HOURS = 24
 
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB

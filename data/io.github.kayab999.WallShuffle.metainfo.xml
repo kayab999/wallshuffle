@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.carlos.WallShuffle</id>
+  <id>io.github.kayab999.WallShuffle</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>WallShuffle</name>
@@ -17,14 +17,10 @@
       <li>Highly compatible: Supports major Linux Desktop Environments</li>
     </ul>
   </description>
-  <launchable type="desktop-id">com.carlos.WallShuffle.desktop</launchable>
-  <screenshots>
-    <screenshot type="default">
-      <caption>The main interface of WallShuffle</caption>
-      <image>https://raw.githubusercontent.com/carlos/wallshuffle/main/assets/screenshot.png</image>
-    </screenshot>
-  </screenshots>
-  <url type="homepage">https://carlos.github.io/wallshuffle/</url>
+  <launchable type="desktop-id">io.github.kayab999.WallShuffle.desktop</launchable>
+  <developer_name>Kayab Software</developer_name>
+  <url type="homepage">https://github.com/kayab999/wallshuffle</url>
+  <url type="bugtracker">https://github.com/kayab999/wallshuffle/issues</url>
   <releases>
     <release version="1.0.2" date="2026-09-07">
       <description>

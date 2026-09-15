@@ -52,7 +52,7 @@ from typing import Any, Optional
 import gi
 
 from .config_manager import get_config_manager
-from .constants import GNOME_COMPAT
+from .constants import APPLICATION_ID, GNOME_COMPAT
 from .core import WallpaperUpdateResult, change_wallpaper
 from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
@@ -91,7 +91,7 @@ class WallpaperApp(Gtk.Application):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(
             *args,
-            application_id="com.carlos.WallShuffle",
+            application_id=APPLICATION_ID,
             flags=Gio.ApplicationFlags.HANDLES_OPEN,
             **kwargs,
         )

@@ -18,7 +18,7 @@ Alternatively, you can install WallShuffle in development mode (which avoids the
 pip install -e . --user
 ```
 
-**Recommended:** Use the provided `./install.sh` script, which handles checking for this requirement.
+**Recommended:** Use the provided `./scripts/install.sh` script, which handles checking for this requirement.
 
 ## Features
 
@@ -37,7 +37,7 @@ pip install -e . --user
 ### Method 1: AppImage (Recommended)
 The **AppImage** is a single executable file that runs on most Linux distributions.
 
-1.  **Download** the latest `WallShuffle-x86_64.AppImage` from the [Releases page](#).
+1.  **Download** the latest `WallShuffle-x86_64.AppImage` from the [Releases page](https://github.com/kayab999/wallshuffle/releases).
 2.  **Make it executable:**
     ```bash
     chmod +x WallShuffle-x86_64.AppImage
@@ -52,7 +52,7 @@ sudo apt update && sudo apt install libfuse2
 ### Method 2: Debian Package (.deb)
 For Debian, Ubuntu, Linux Mint, and derivatives:
 
-1.  **Download** the `wallshuffle_1.0.0_all.deb` file.
+1.  **Download** the `wallshuffle_1.0.2_all.deb` file.
 2.  **Install** via terminal:
     ```bash
     sudo apt install ./wallshuffle_1.0.0_all.deb
@@ -63,7 +63,7 @@ For Debian, Ubuntu, Linux Mint, and derivatives:
 ```bash
 git clone https://github.com/kayab999/wallshuffle.git
 cd wallshuffle
-./install.sh
+make setup
 ```
 
 ## Usage
@@ -184,7 +184,7 @@ If you prefer to build the AppImage yourself step by step:
     ```
 3.  **Run the build script:**
     ```bash
-    ./build_appimage.sh
+    ./scripts/build_appimage.sh
     ```
     The final AppImage will be located in the project's root directory.
 
@@ -197,21 +197,20 @@ If you prefer to build the AppImage yourself step by step:
 ## ☕ Support Development
 
 - **Buy Me A Coffee:** [https://buymeacoffee.com/kayabsoftware](https://buymeacoffee.com/kayabsoftware)
-- **Ko-fi:** `https://ko-fi.com/nysekf`
 
 ## Uninstall
 
 To completely remove Wallshuffle from your system, use the provided uninstall script:
 
 ```bash
-./uninstall.sh
+./scripts/uninstall.sh
 ```
 
 This script will safely remove the AppImage, wrapper, desktop entries, icons, and disable any active systemd timers.
 
 Options:
-- `./uninstall.sh --purge`: Also removes configuration files and logs.
-- `./uninstall.sh --help`: Show usage information.
+- `./scripts/uninstall.sh --purge`: Also removes configuration files and logs.
+- `./scripts/uninstall.sh --help`: Show usage information.
 
 ## License
 

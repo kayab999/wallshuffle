@@ -1,5 +1,9 @@
 # Changelog - WallShuffle
 
+## [Unreleased]
+### Changed
+- Public identity aligned with GitHub (`kayab999/wallshuffle`): application id `io.github.kayab999.WallShuffle`, Kayab Software metadata, no in-repo user config or editor settings.
+
 ## [1.0.2] - 2026-09-07
 ### Fixed — Fase 1 Hardening (Silent Failures)
 - **Config lock:** `ConfigLockTimeoutError` con `monotonic 5s` en `load_settings` — evita pérdida silenciosa, muestra `show_error_dialog` en GUI y `FILE_SYSTEM_ERROR` en headless (`config_manager.py`, `core.py`, `app.py`).
