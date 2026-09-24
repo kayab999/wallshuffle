@@ -4,7 +4,7 @@
 ### Fixed — Dock launch regression (v1.0.2 broke GUI open)
 - **GUI crash:** Remove local `from gi.repository import GLib` shadowing global in `WallpaperApp.__init__` (`UnboundLocalError` on every dock launch); hermetic `WALLSHUFFLE_INSTANCE` socket suffix, no `sys.exit` in GTK vfuncs, `do_open` routing, fix missing `present_window` (`app.py`).
 - **Display gate:** Accept `DISPLAY` or `WAYLAND_DISPLAY`; prefer X11 with native Wayland retry (`__main__.py`); lazy `__init__` for `--version` without heavy deps.
-- **Desktop activation:** Reverse-DNS `io.github.kayab999.WallShuffle.desktop` primary + `DBusActivatable`, compat symlink, aligned icons/Exec (`data/`, `setup.py`, `install.sh`, `uninstall.sh`, `build_deb.sh`).
+- **Desktop activation:** Reverse-DNS `io.github.kayab999.WallShuffle.desktop` primary + compat symlink, aligned icons/Exec (`data/`, `setup.py`, `install.sh`, `uninstall.sh`, `build_deb.sh`). No `DBusActivatable` (no D-Bus service file shipped; single-instance stays socket-based).
 - **Packaging:** `pyproject` `include wallshuffle*` (wheel omitted `ui/`), `pygobject<3.51` pin, icon filename fix.
 - **Scheduler/secrets:** APPIMAGE-stable timer path (no `/tmp/.mount` persistence), `shlex.quote` cron exec, Wayland env in cron/systemd, Unsplash key via `Authorization` header + circuit-breaker on SSL/network/JSON.
 - **Data-loss/polling:** Corrupt config backup (no silent wipe), one-shot initial poll, history shared-lock read, thumbnail generation guard.

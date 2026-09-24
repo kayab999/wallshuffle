@@ -13,7 +13,7 @@ WallShuffle is a single-process GTK3 desktop application for Linux that changes 
 
 ```
 wallshuffle/
-├── __main__.py          # CLI args, logging, backend selection (X11 on Wayland)
+├── __main__.py          # CLI args, logging, backend selection (prefers X11 on Wayland, falls back to native)
 ├── app.py               # Gtk.Application, tray, single-instance IPC
 ├── core.py              # change_wallpaper() orchestration
 ├── wallpaper_manager.py # Desktop environment adapters (GNOME/KDE/XFCE)

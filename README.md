@@ -80,16 +80,17 @@ make setup
   - **Ubuntu/Debian:** `sudo apt install gir1.2-ayatanaappindicator3-0.1` or `gir1.2-appindicator3-0.1`
   - **Fedora:** `sudo dnf install libappindicator-gtk3`
   - **Arch:** `sudo pacman -S libappindicator-gtk3`
-- **Wayland Compatibility:** If you are running a Wayland session (common in Ubuntu 22.04+), WallShuffle automatically forces the **X11 backend (via XWayland)** for stability. 
-  - If the tray icon is still missing on Wayland, you can try disabling the X11 force by setting the environment variable: `WALLSHUFFLE_FORCE_WAYLAND=1`.
+- **Wayland Compatibility:** If you are running a Wayland session (common in Ubuntu 22.04+), WallShuffle prefers the **X11 backend (via XWayland)** for stability and automatically falls back to native Wayland if XWayland is unavailable.
+  - To force native Wayland, set: `WALLSHUFFLE_FORCE_WAYLAND=1`.
 - **Systemd Dependency:** Wallshuffle uses `systemd` timers for scheduling. This will not work on non-systemd distros (e.g., Devuan, Artix).
+- **App Won't Open From Dock/Menu:** After updating to v1.0.3, unpin the old icon and re-pin the running app once (the application identity changed to `io.github.kayab999.WallShuffle`). A second click never opens a duplicate window — it wakes the existing one via single-instance. If nothing appears, check `~/.config/wallshuffle/logs/wallshuffle.log` for `CRITICAL` lines.
 - **libfuse2:** AppImages require `libfuse2`. If the app won't start, run: `sudo apt install libfuse2`.
 
 ## Configuration Options
 
 When you launch the application, you will be presented with the following options:
 
-- **Source:** Choose between "Local Folder" or "Unsplash".
+- **Source:** Choose between "Local Folder", "Unsplash", or "URL / Hyperlink".
 - **Local Folder:** If you choose this source, click "Browse..." to select the folder containing your images.
 - **Unsplash Keywords:** If you choose Unsplash, enter some keywords (e.g., "nature, landscapes") to guide the image selection.
 - **Display Mode:** Control how the image is displayed (e.g., Zoom, Scaled, Centered).
@@ -103,13 +104,15 @@ Click **Save** to apply your settings. If a tray icon is available, the window m
 
 **Scheduling:** Prefer **systemd --user** timers. On systems without systemd, Save installs a user **crontab** entry tagged `WALLSHUFFLE_TIMER` (interval mapped to valid cron syntax).
 
-## 🚀 v1.0.0 Gold Master (Hardening Release)
+## 🚀 Recent Releases
 
-The following critical features and deep security/stability fixes define the 'Gold Master' iteration of WallShuffle:
+See [CHANGELOG.md](CHANGELOG.md) for full details — current release is **v1.0.3** (dock-launch fix). Earlier hardening highlights:
+
+The following critical features and deep security/stability fixes define the hardening iterations of WallShuffle:
 
 - **Bulletproof Concurrency:** Implemented non-blocking `fcntl.flock` with timeouts to strictly serialize `change_wallpaper` requests. The system gracefully handles simultaneous calls from systemd timers and user GUI interactions without thread exhaustion or race conditions.
 - **Atomic IPC Security:** Implemented `FrameLengthSocket` protocol for all Unix socket communications, guaranteeing atomic message reception and eliminating vulnerabilities to 'Partial IPC Reads'.
-- **Resilient Exception Handling:** Conducted a comprehensive audit and refactor of exception handling, replacing generic `except Exception` blocks with specific handlers and comprehensive logging. This ensures observability and eliminates silent failures.
+- **Resilient Exception Handling:** Exception handling was refactored toward specific handlers with logging to reduce silent failures and improve observability.
 - **Smart LRU Cache Management:** Added an intelligent caching policy for online sources (default 500MB limit). It proactively purges the oldest images using a Least Recently Used (LRU) algorithm, keeping your disk space clean out-of-the-box.
 - **Dynamic Systemd Integration:** Replaced static environment variable capture with dynamic specifiers (`%U`, `%t`) and live session imports. The background service now survives session changes and dbus restarts flawlessly.
 - **Strict Security & Privacy (0o700):** Hardened directory creation permissions. All config, cache, and log folders are now created with `0o700` mode. Command injection risks via cron have been neutralized using `shlex.quote`.
@@ -191,8 +194,8 @@ If you prefer to build the AppImage yourself step by step:
 ## 🛡️ Sovereignty & Limitations
 
 - **Privacy First:** WallShuffle does not collect metrics, telemetry, or crash reports. It is 100% local-first.
-- **Wayland Note:** On Wayland sessions, the app forces the X11 backend to ensure GTK3 stability and correct window positioning.
-- **Dependencies:** If using the `.deb` package, ensure you have `gir1.2-gtk-3.0` and `python3-pil` installed.
+- **Wayland Note:** On Wayland sessions, the app prefers the X11 backend (via XWayland) for GTK3 stability, with automatic fallback to native Wayland.
+- **Dependencies:** If using the `.deb` package, ensure you have `gir1.2-gtk-3.0`, `python3-pil`, `python3-requests`, and `gir1.2-appindicator3-0.1` (or `gir1.2-ayatanaappindicator3-0.1`) installed (`apt` handles these automatically).
 
 ## ☕ Support Development
 

@@ -54,7 +54,9 @@ class TestPackaging(unittest.TestCase):
 
         desktop = (REPO / "data" / "io.github.kayab999.WallShuffle.desktop").read_text()
         self.assertIn(f"StartupWMClass={APPLICATION_ID}", desktop)
-        self.assertIn("DBusActivatable=true", desktop)
+        # No DBusActivatable without a dbus-1 .service file: launchers would
+        # attempt D-Bus activation and never Exec the binary (silent no-open).
+        self.assertNotIn("DBusActivatable", desktop)
         self.assertTrue((REPO / "data" / "io.github.kayab999.WallShuffle.png").exists())
 
     def test_lazy_init(self):
