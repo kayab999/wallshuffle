@@ -1,0 +1,2 @@
+e1e6ec0a905cbe2a2574f1a6322bd44b173abea405481ee2f533ce25145672b2  WallShuffle-x86_64.AppImage
+e1e6ec0a905cbe2a2574f1a6322bd44b173abea405481ee2f533ce25145672b2  WallShuffle-1.0.3-x86_64.AppImage

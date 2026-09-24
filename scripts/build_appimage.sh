@@ -139,16 +139,19 @@ mkdir -p "$APPDIR_PATH/usr/share/metainfo"
 echo "--- Copying bundled application and assets ---"
 cp -a "dist/${LOWER_APP_NAME}/." "$APPDIR_PATH/usr/bin/"
 
-# Desktop file for appimagetool (Name=/Icon=/Exec= must match the binary).
+# Desktop file for appimagetool. DBusActivatable=true requires a reverse-DNS
+# filename, so the AppDir root entry uses the canonical RDNS name.
 # Only rewrite the first Exec= so the Next Wallpaper action keeps --change.
+RDNS_DESKTOP="io.github.kayab999.WallShuffle.desktop"
 awk '
   /^Icon=/ { print "Icon=wallshuffle"; next }
   /^Exec=/ && !done { print "Exec=wallshuffle"; done=1; next }
   /^X-GNOME-Autostart-enabled=/ { next }
   { print }
 ' data/io.github.kayab999.WallShuffle.desktop \
-  > "$APPDIR_PATH/${LOWER_APP_NAME}.desktop"
-cp "$APPDIR_PATH/${LOWER_APP_NAME}.desktop" "$APPDIR_PATH/usr/share/applications/"
+  > "$APPDIR_PATH/${RDNS_DESKTOP}"
+cp "$APPDIR_PATH/${RDNS_DESKTOP}" "$APPDIR_PATH/usr/share/applications/"
+ln -sf "${RDNS_DESKTOP}" "$APPDIR_PATH/usr/share/applications/${LOWER_APP_NAME}.desktop"
 
 cp "$ICON_FILE" "$APPDIR_PATH/usr/share/icons/hicolor/256x256/apps/${LOWER_APP_NAME}.png"
 cp "$ICON_FILE" "$APPDIR_PATH/${LOWER_APP_NAME}.png"
