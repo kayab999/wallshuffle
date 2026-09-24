@@ -9,7 +9,6 @@ Categories=Settings;DesktopSettings;
 Keywords=wallpaper;background;changer;shuffle;
 StartupNotify=true
 StartupWMClass=io.github.kayab999.WallShuffle
-DBusActivatable=true
 X-GNOME-Autostart-enabled=true
 Actions=NextWallpaper;
 

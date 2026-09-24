@@ -163,9 +163,11 @@ if grep -q '^StartupWMClass=' "$DESKTOP_DIR/$APP_ID.desktop"; then
 else
   printf 'StartupWMClass=%s\n' "$APP_ID" >> "$DESKTOP_DIR/$APP_ID.desktop"
 fi
-if ! grep -q '^DBusActivatable=' "$DESKTOP_DIR/$APP_ID.desktop"; then
-  printf 'DBusActivatable=true\n' >> "$DESKTOP_DIR/$APP_ID.desktop"
-fi
+# NOTE: do NOT advertise DBusActivatable — no D-Bus .service file is shipped
+# (single-instance is socket-based). Advertising it makes dock launchers
+# attempt D-Bus activation and never Exec the binary (silent no-open).
+# Strip it if a source desktop ever contains it.
+sed -i "/^DBusActivatable=/d" "$DESKTOP_DIR/$APP_ID.desktop"
 # Legacy compat: keep old name as symlink so existing pins still resolve
 ln -sf "$APP_ID.desktop" "$DESKTOP_DIR/$APP_NAME.desktop"
 
