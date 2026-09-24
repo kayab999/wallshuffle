@@ -1,5 +1,14 @@
 # Changelog - WallShuffle
 
+## [1.0.3] - 2026-09-24
+### Fixed — Dock launch regression (v1.0.2 broke GUI open)
+- **GUI crash:** Remove local `from gi.repository import GLib` shadowing global in `WallpaperApp.__init__` (`UnboundLocalError` on every dock launch); hermetic `WALLSHUFFLE_INSTANCE` socket suffix, no `sys.exit` in GTK vfuncs, `do_open` routing, fix missing `present_window` (`app.py`).
+- **Display gate:** Accept `DISPLAY` or `WAYLAND_DISPLAY`; prefer X11 with native Wayland retry (`__main__.py`); lazy `__init__` for `--version` without heavy deps.
+- **Desktop activation:** Reverse-DNS `io.github.kayab999.WallShuffle.desktop` primary + `DBusActivatable`, compat symlink, aligned icons/Exec (`data/`, `setup.py`, `install.sh`, `uninstall.sh`, `build_deb.sh`).
+- **Packaging:** `pyproject` `include wallshuffle*` (wheel omitted `ui/`), `pygobject<3.51` pin, icon filename fix.
+- **Scheduler/secrets:** APPIMAGE-stable timer path (no `/tmp/.mount` persistence), `shlex.quote` cron exec, Wayland env in cron/systemd, Unsplash key via `Authorization` header + circuit-breaker on SSL/network/JSON.
+- **Data-loss/polling:** Corrupt config backup (no silent wipe), one-shot initial poll, history shared-lock read, thumbnail generation guard.
+
 ## [1.0.2] - 2026-09-15
 ### Fixed — Fase 1 Hardening (Silent Failures)
 - **Config lock:** `ConfigLockTimeoutError` con `monotonic 5s` en `load_settings` — evita pérdida silenciosa, muestra `show_error_dialog` en GUI y `FILE_SYSTEM_ERROR` en headless (`config_manager.py`, `core.py`, `app.py`).

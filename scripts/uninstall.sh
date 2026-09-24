@@ -47,9 +47,11 @@ echo "Removing binaries, wrappers, and icons..."
 rm -f "$HOME/.local/bin/wallshuffle"
 # AppImage
 rm -f "$HOME/Applications/WallShuffle.AppImage"
-# Desktop file
+# Desktop files (reverse-DNS primary + legacy compat)
+rm -f "$HOME/.local/share/applications/io.github.kayab999.WallShuffle.desktop"
 rm -f "$HOME/.local/share/applications/wallshuffle.desktop"
-# Icons
+# Icons (reverse-DNS + legacy)
+rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/io.github.kayab999.WallShuffle.png"
 rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/wallshuffle.png"
 # Legacy/Scalable (just in case)
 rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/wallshuffle.svg"

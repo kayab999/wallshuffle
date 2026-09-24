@@ -66,10 +66,11 @@ class WallpaperAppWindow(
         logging.debug("Updating image count")
         self.update_image_count()
 
-        # Start adaptive status polling (5s when focused, 30s when not)
+        # Start adaptive status polling (5s when focused, 30s when not).
+        # One-shot initial poll after 1s; adaptive timer owns the repeat.
         self._poll_timeout_id = None
         self._poll_interval_seconds = 5
-        GLib.timeout_add(1000, self.poll_timer_status)  # Initial poll after 1s
+        GLib.timeout_add(1000, lambda: (self.poll_timer_status(), False)[1])
         self._start_adaptive_poll()
 
         self.connect("delete-event", self.on_delete_event)

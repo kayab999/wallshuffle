@@ -22,6 +22,17 @@
   <url type="homepage">https://github.com/kayab999/wallshuffle</url>
   <url type="bugtracker">https://github.com/kayab999/wallshuffle/issues</url>
   <releases>
+    <release version="1.0.3" date="2026-09-24">
+      <description>
+        <p>Dock-launch fix release.</p>
+        <ul>
+          <li>Fix UnboundLocalError GLib crash on every GUI launch (dock icon)</li>
+          <li>Wayland/X11 fallback, DISPLAY or WAYLAND_DISPLAY gate</li>
+          <li>Reverse-DNS desktop activation, single-instance hardening</li>
+          <li>Wheel packaging, pygobject pin, timer/credential fixes</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-09-15">
       <description>
         <p>Hardening release — silent failures.</p>

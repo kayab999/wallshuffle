@@ -6,16 +6,17 @@
 set -e
 
 APP_NAME="wallshuffle"
+APP_ID="io.github.kayab999.WallShuffle"
 APP_IMAGE="WallShuffle-x86_64.AppImage"
 # Install AppImage to Applications folder (user standard)
 APP_DIR="$HOME/Applications"
 INSTALL_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
-ICON_FILE="icon.png"
-DESKTOP_FILE_SOURCE="wallshuffle.desktop"
+ICON_FILE="assets/icon.png"
+DESKTOP_FILE_SOURCE="data/$APP_ID.desktop"
 
-echo "--- Installing WallShuffle v1.0 (AppImage) ---"
+echo "--- Installing WallShuffle v1.0.3 (AppImage) ---"
 
 # --- 0. Pre-flight Check: libfuse2 (Critical for AppImages on modern Ubuntu/Debian) ---
 check_libfuse2() {
@@ -114,43 +115,59 @@ chmod +x "$INSTALL_DIR/$APP_NAME"
 
 # 5. Install Icon
 echo "Installing icon..."
-if [ -f "$ICON_FILE" ]; then
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$REPO_ROOT/$ICON_FILE" ]; then
+    cp "$REPO_ROOT/$ICON_FILE" "$ICON_DIR/$APP_ID.png"
+    # Compat name for legacy desktop entries
+    cp "$REPO_ROOT/$ICON_FILE" "$ICON_DIR/$APP_NAME.png"
+elif [ -f "$ICON_FILE" ]; then
+    cp "$ICON_FILE" "$ICON_DIR/$APP_ID.png"
     cp "$ICON_FILE" "$ICON_DIR/$APP_NAME.png"
 else
     echo "WARNING: $ICON_FILE not found. Icon will be missing."
 fi
 
-# 6. Install Desktop Entry
+# 6. Install Desktop Entry (reverse-DNS primary + legacy compat symlink)
 echo "Configuring desktop entry..."
-# Prefer repo assets if present (running from source tree), else CWD artifact.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-if [ -f "$REPO_ROOT/assets/wallshuffle_installed.desktop" ]; then
+if [ -f "$REPO_ROOT/data/$APP_ID.desktop" ]; then
+  DESKTOP_SRC="$REPO_ROOT/data/$APP_ID.desktop"
+elif [ -f "$REPO_ROOT/assets/wallshuffle_installed.desktop" ]; then
   DESKTOP_SRC="$REPO_ROOT/assets/wallshuffle_installed.desktop"
 elif [ -f "$DESKTOP_FILE_SOURCE" ]; then
   DESKTOP_SRC="$DESKTOP_FILE_SOURCE"
 else
   DESKTOP_SRC="$REPO_ROOT/assets/wallshuffle.desktop"
 fi
-cp "$DESKTOP_SRC" "$DESKTOP_DIR/$APP_NAME.desktop"
+cp "$DESKTOP_SRC" "$DESKTOP_DIR/$APP_ID.desktop"
 
 # Rewrite only the main Desktop Entry Exec (first Exec=), not Desktop Action lines.
-if grep -q '^Exec=' "$DESKTOP_DIR/$APP_NAME.desktop"; then
+if grep -q '^Exec=' "$DESKTOP_DIR/$APP_ID.desktop"; then
   # Replace first Exec= only
   awk -v exe="$INSTALL_DIR/$APP_NAME" '
     BEGIN { done=0 }
     /^Exec=/ && !done { print "Exec=" exe; done=1; next }
     { print }
-  ' "$DESKTOP_DIR/$APP_NAME.desktop" > "$DESKTOP_DIR/$APP_NAME.desktop.tmp"
-  mv "$DESKTOP_DIR/$APP_NAME.desktop.tmp" "$DESKTOP_DIR/$APP_NAME.desktop"
+  ' "$DESKTOP_DIR/$APP_ID.desktop" > "$DESKTOP_DIR/$APP_ID.desktop.tmp"
+  mv "$DESKTOP_DIR/$APP_ID.desktop.tmp" "$DESKTOP_DIR/$APP_ID.desktop"
 fi
 
 # Ensure action keeps --change with full wrapper path
-sed -i "s|^Exec=wallshuffle --change|Exec=$INSTALL_DIR/$APP_NAME --change|" "$DESKTOP_DIR/$APP_NAME.desktop"
-sed -i "s|^Exec=wallshuffle$|Exec=$INSTALL_DIR/$APP_NAME|" "$DESKTOP_DIR/$APP_NAME.desktop"
+sed -i "s|^Exec=wallshuffle --change|Exec=$INSTALL_DIR/$APP_NAME --change|" "$DESKTOP_DIR/$APP_ID.desktop"
+sed -i "s|^Exec=wallshuffle$|Exec=$INSTALL_DIR/$APP_NAME|" "$DESKTOP_DIR/$APP_ID.desktop"
 
-# Ensure Icon line refers to the installed icon name
-sed -i "s|^Icon=.*|Icon=$APP_NAME|" "$DESKTOP_DIR/$APP_NAME.desktop"
+# Ensure Icon/WMClass match reverse-DNS identity for dock matching
+sed -i "s|^Icon=.*|Icon=$APP_ID|" "$DESKTOP_DIR/$APP_ID.desktop"
+if grep -q '^StartupWMClass=' "$DESKTOP_DIR/$APP_ID.desktop"; then
+  sed -i "s|^StartupWMClass=.*|StartupWMClass=$APP_ID|" "$DESKTOP_DIR/$APP_ID.desktop"
+else
+  printf 'StartupWMClass=%s\n' "$APP_ID" >> "$DESKTOP_DIR/$APP_ID.desktop"
+fi
+if ! grep -q '^DBusActivatable=' "$DESKTOP_DIR/$APP_ID.desktop"; then
+  printf 'DBusActivatable=true\n' >> "$DESKTOP_DIR/$APP_ID.desktop"
+fi
+# Legacy compat: keep old name as symlink so existing pins still resolve
+ln -sf "$APP_ID.desktop" "$DESKTOP_DIR/$APP_NAME.desktop"
 
 # 7. Update Desktop Database
 if command -v update-desktop-database &> /dev/null; then
@@ -159,8 +176,9 @@ if command -v update-desktop-database &> /dev/null; then
 fi
 
 echo "--- Installation Complete! ---"
-echo "WallShuffle v1.0 has been installed."
+echo "WallShuffle v1.0.3 has been installed."
 echo "You can launch it from your application menu."
+echo "NOTE: dock pins to the old entry must be re-pinned once to $APP_ID."
 
 # Check PATH
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then

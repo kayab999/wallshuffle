@@ -163,6 +163,19 @@ class ConfigManager:
             raise
         except (configparser.Error, IOError, OSError, ValueError) as e:
             logging.error(f"Error reading config file {CONFIG_FILE}: {e}")
+            # P1: never silently wipe user data. Back up corrupt file for recovery.
+            try:
+                if os.path.exists(CONFIG_FILE):
+                    import time as _time
+
+                    backup = f"{CONFIG_FILE}.corrupt.bak.{int(_time.time())}"
+                    try:
+                        os.replace(CONFIG_FILE, backup)
+                        logging.warning(f"Corrupt config backed up to {backup}")
+                    except OSError as be:
+                        logging.error(f"Could not back up corrupt config: {be}")
+            except Exception:
+                pass
             self.create_default_config(config)
 
         return config

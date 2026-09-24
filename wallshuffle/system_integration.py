@@ -9,23 +9,33 @@ from .utils import escape_systemd_path, escape_systemd_working_dir
 def _find_executable_for_timer():
     """
     Returns the stable path that systemd or cron should execute to invoke wallshuffle --change.
-    Prefers: user-installed wrapper (which wallshuffle) -> APPIMAGE wrapper -> sys.executable.
+    Prefers: APPIMAGE stable install -> user-installed wrapper (which wallshuffle) -> sys.executable.
+    NOTE: AppRun prepends the transient FUSE mount to PATH, so shutil.which() inside
+    an AppImage can resolve to a disappearing /tmp/.mount path. Check APPIMAGE first.
     """
-    # 1) Prefer installable executable in PATH (editable install or wrapper)
-    exe = shutil.which("wallshuffle")
-    if exe:
-        return exe
-
-    # 2) If running inside AppImage and an installed wrapper exists, prefer it.
+    # 1) If running inside AppImage, prefer the stable user install location.
     appimage_path = os.environ.get("APPIMAGE")
     if appimage_path:
         # Possible recommended AppImage location in user installation
         user_appimage = os.path.expanduser("~/Applications/WallShuffle.AppImage")
         if os.path.isfile(user_appimage) and os.access(user_appimage, os.X_OK):
             return user_appimage
-        # Otherwise, use direct APPIMAGE path (less ideal, but explicit)
+        # Otherwise, use direct APPIMAGE path only if it looks stable
+        # (not a transient /tmp/.mount_* FUSE path).
         if os.path.isfile(appimage_path) and os.access(appimage_path, os.X_OK):
-            return appimage_path
+            if not appimage_path.startswith("/tmp/.mount"):
+                return appimage_path
+
+    # 2) Prefer installable executable in PATH (editable install or wrapper)
+    exe = shutil.which("wallshuffle")
+    if exe:
+        # Guard: never persist a transient AppImage mount path in timers/cron.
+        if not exe.startswith("/tmp/.mount"):
+            return exe
+        # Fall through to stable locations if which() hit a transient mount.
+
+    if appimage_path and os.path.isfile(appimage_path) and os.access(appimage_path, os.X_OK):
+        return appimage_path
 
     # 3) Fallback: sys.executable (dev mode)
     return sys.executable
@@ -44,18 +54,26 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
     uid = os.getuid()
     dbus_address = shlex.quote(os.environ.get("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"))
     display = shlex.quote(os.environ.get("DISPLAY", ":0"))
+    wayland_display = shlex.quote(os.environ.get("WAYLAND_DISPLAY", ""))
     xdg = shlex.quote(os.environ.get("XDG_CURRENT_DESKTOP", ""))
+    xdg_session = shlex.quote(os.environ.get("XDG_SESSION_TYPE", ""))
 
     if exec_path == sys.executable:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         # working_dir doesn't need quote if it's from project_root, but safer
         safe_root = shlex.quote(project_root)
-        command = f"cd {safe_root} && {exec_path} -m wallshuffle --change"
+        safe_exec = shlex.quote(exec_path)
+        command = f"cd {safe_root} && {safe_exec} -m wallshuffle --change"
     else:
-        command = f"{exec_path} --change"
+        safe_exec = shlex.quote(exec_path)
+        command = f"{safe_exec} --change"
 
     # Wrap with environment variables. shlex.quote already adds quotes if needed.
-    full_cmd = f"DBUS_SESSION_BUS_ADDRESS={dbus_address} DISPLAY={display} XDG_CURRENT_DESKTOP={xdg} {command} {tag}"
+    env_base = f"DBUS_SESSION_BUS_ADDRESS={dbus_address} DISPLAY={display} XDG_CURRENT_DESKTOP={xdg} XDG_SESSION_TYPE={xdg_session}"
+    if wayland_display.strip("'\""):
+        full_cmd = f"{env_base} WAYLAND_DISPLAY={wayland_display} {command} {tag}"
+    else:
+        full_cmd = f"{env_base} {command} {tag}"
 
     # Cron minute field only accepts 1–59 step. Larger intervals use hours.
     safe_interval = max(int(interval), 0)
@@ -183,7 +201,7 @@ WantedBy=timers.target
 
         # Proactivamente importar el entorno actual al gestor de systemd user
         # Esto ayuda a que el timer funcione inmediatamente en la sesión actual.
-        import_cmd = ["systemctl", "--user", "import-environment", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS"]
+        import_cmd = ["systemctl", "--user", "import-environment", "DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS"]
         run_subprocess_func(import_cmd, "import-environment", timeout=5)
 
         enable_timer = max(int(interval), 0) > 0

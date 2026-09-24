@@ -52,10 +52,10 @@ sudo apt update && sudo apt install libfuse2
 ### Method 2: Debian Package (.deb)
 For Debian, Ubuntu, Linux Mint, and derivatives:
 
-1.  **Download** the `wallshuffle_1.0.2_all.deb` file.
+1.  **Download** the `wallshuffle_1.0.3_all.deb` file.
 2.  **Install** via terminal:
     ```bash
-    sudo apt install ./wallshuffle_1.0.0_all.deb
+    sudo apt install ./wallshuffle_1.0.3_all.deb
     ```
     (Using `apt` instead of `dpkg` automatically handles dependencies like `python3-gi`).
 

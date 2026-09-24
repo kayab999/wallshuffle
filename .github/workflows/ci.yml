@@ -35,8 +35,27 @@ jobs:
     - name: Lint with Ruff & Mypy
       run: |
         make lint
-        
+        # Forbid silencing the crash class that broke dock launch (v1.0.2 GLib shadow)
+        ! grep -rn "noqa: *F82" wallshuffle/ || (echo "noqa on F82x forbidden" && exit 1)
+
+    - name: Smoke import (catch UI-split regressions)
+      run: |
+        .venv/bin/python -c "import wallshuffle.app; from wallshuffle.ui import WallpaperAppWindow; print('smoke import ok')"
+
     - name: Test with Pytest
       run: |
         # Run non-GUI tests only on CI (headless)
         .venv/bin/python -m pytest -m "not gui"
+
+    - name: Verify wheel contents (pip installs must ship ui/)
+      run: |
+        .venv/bin/pip install -q build
+        .venv/bin/python -m build --wheel --outdir /tmp/wheelcheck
+        .venv/bin/python - <<'PY'
+        import glob, sys, zipfile
+        whl = sorted(glob.glob('/tmp/wheelcheck/*.whl'))[-1]
+        names = zipfile.ZipFile(whl).namelist()
+        for required in ['wallshuffle/__init__.py', 'wallshuffle/app.py', 'wallshuffle/ui/__init__.py', 'wallshuffle/theme_engine/__init__.py']:
+            assert any(n.endswith(required) for n in names), f"missing {required} in {whl}"
+        print(f"wheel ok: {whl}")
+        PY

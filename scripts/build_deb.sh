@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="wallshuffle"
-VERSION="1.0.2"
+VERSION="1.0.3"
 ARCH="all"
 BUILD_DIR="build_deb"
 OUT="${APP_NAME}_${VERSION}_${ARCH}.deb"
@@ -43,14 +43,14 @@ EOF
 chmod 755 "$BUILD_DIR/usr/bin/$APP_NAME"
 
 echo "Installing desktop entry, metainfo, and icon..."
-# Keep the filename wallshuffle.desktop so uninstall.sh and menus stay consistent.
-# Icon name matches /usr/share/pixmaps/wallshuffle.png.
+# Primary reverse-DNS desktop for GApplication D-Bus activation + legacy compat name.
 awk '
   /^Icon=/ { print "Icon=wallshuffle"; next }
   /^X-GNOME-Autostart-enabled=/ { next }
   { print }
 ' data/io.github.kayab999.WallShuffle.desktop \
-  > "$BUILD_DIR/usr/share/applications/${APP_NAME}.desktop"
+  > "$BUILD_DIR/usr/share/applications/io.github.kayab999.WallShuffle.desktop"
+ln -sf io.github.kayab999.WallShuffle.desktop "$BUILD_DIR/usr/share/applications/${APP_NAME}.desktop"
 cp data/io.github.kayab999.WallShuffle.metainfo.xml \
    "$BUILD_DIR/usr/share/metainfo/io.github.kayab999.WallShuffle.metainfo.xml"
 cp assets/icon.png "$BUILD_DIR/usr/share/pixmaps/${APP_NAME}.png"

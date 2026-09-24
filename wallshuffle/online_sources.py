@@ -142,10 +142,13 @@ class OnlineSourceManager:
             return None, error_msg
 
         encoded_keywords = quote_plus(keywords or "")
-        url = f"https://api.unsplash.com/photos/random?query={encoded_keywords}&client_id={unsplash_api_key}"
+        url = f"https://api.unsplash.com/photos/random?query={encoded_keywords}"
+        auth_headers = {"Authorization": f"Client-ID {unsplash_api_key}"}
         try:
-            # Use (connect, read) tuple timeouts for stricter deadlines
-            response = self.session.get(url, timeout=(5, 10))
+            # Use (connect, read) tuple timeouts for stricter deadlines.
+            # NOTE: API key sent as Authorization header (never in URL) so
+            # requests/urllib3 error strings and logs cannot leak the secret.
+            response = self.session.get(url, headers=auth_headers, timeout=(5, 10))
             response.raise_for_status()
             data = response.json()
             image_url = data["urls"]["full"]
@@ -237,21 +240,25 @@ class OnlineSourceManager:
             logging.error(error_msg)
             self._record_failure()
             return None, error_msg
-        except requests.exceptions.SSLError as e:
-            error_msg = f"SSL/Certificate error fetching from Unsplash (possible local system issue): {e}"
+        except requests.exceptions.SSLError:
+            error_msg = "SSL/Certificate error fetching from Unsplash (possible local system issue)."
             logging.error(error_msg)
+            self._record_failure()
             return None, error_msg
         except requests.exceptions.RequestException as e:
-            error_msg = f"General network request failure for keywords '{keywords}': {e}"
-            logging.error(error_msg)
+            error_msg = f"General network request failure for keywords '{keywords}'."
+            logging.error(f"{error_msg} ({type(e).__name__})")
+            self._record_failure()
             return None, error_msg
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON response from Unsplash for keywords: {keywords}. Error: {e}"
             logging.error(error_msg)
+            self._record_failure()
             return None, error_msg
         except KeyError as e:
             error_msg = f"Missing data in Unsplash response for keywords: {keywords}. Error: {e}"
             logging.error(error_msg)
+            self._record_failure()
             return None, error_msg
         except IOError as e:
             error_msg = f"File I/O error while saving Unsplash image: {e}"
@@ -270,11 +277,11 @@ class OnlineSourceManager:
         if not api_key or api_key == "YOUR_UNSPLASH_API_KEY":
             return False, "Please enter a valid API Key."
 
-        url = f"https://api.unsplash.com/search/photos?query=nature&per_page=1&client_id={api_key}"
+        url = "https://api.unsplash.com/search/photos?query=nature&per_page=1"
 
         try:
-            # Also use resilient session for testing connection
-            response = self.session.get(url, timeout=5)
+            # Also use resilient session for testing connection (key via header, never URL).
+            response = self.session.get(url, headers={"Authorization": f"Client-ID {api_key}"}, timeout=5)
             if response.status_code == 200:
                 return True, "Connection successful! API Key is valid."
             elif response.status_code == 401:

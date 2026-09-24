@@ -9,7 +9,7 @@ import struct
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from .constants import MAX_IPC_MESSAGE_BYTES, WALLPAPER_CHANGE_TIMEOUT_SEC
 
@@ -46,8 +46,6 @@ class FrameLengthSocket:
             except socket.timeout:
                 return None
         return bytes(data)
-
-from typing import Any, Optional
 
 import gi
 
@@ -102,14 +100,17 @@ class WallpaperApp(Gtk.Application):
         self.paused = False
         self.css_provider: Any = None  # Gtk.CssProvider type
         self.server_socket: Optional[socket.socket] = None
-        # Include UID in socket name to support multi-user environments
-        self.socket_name = f"\0wallshuffle_{os.getuid()}_lock"
+        # Include UID in socket name to support multi-user environments.
+        # WALLSHUFFLE_INSTANCE allows hermetic tests/smoke (default keeps
+        # stable single-instance behavior for real dock launches).
+        _instance_suffix = os.environ.get("WALLSHUFFLE_INSTANCE", "lock")
+        self.socket_name = f"\0wallshuffle_{os.getuid()}_{_instance_suffix}"
 
         # Register cleanup handlers safely integrated with GLib main loop
         # This prevents GTK from hiding SystemExit exceptions and hanging on session logout
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._glib_signal_handler, signal.SIGTERM)  # noqa: F823
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)  # noqa: F823
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)  # noqa: F823
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._glib_signal_handler, signal.SIGTERM)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._glib_signal_handler, signal.SIGINT)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, self._glib_signal_handler, signal.SIGHUP)
 
         self.logger.debug("Initializing ThemeEngine in WallpaperApp.__init__")
         self.config_manager = get_config_manager()
@@ -120,8 +121,9 @@ class WallpaperApp(Gtk.Application):
             # Timeout de lock — GUI muestra error, headless loguea y usa defaults temporales en memoria
             logging.error(f"Config lock timeout in WallpaperApp.__init__: {e}")
             try:
-                from gi.repository import GLib
-
+                # NOTE: use global GLib (imported at module top). A local
+                # `from gi.repository import GLib` here would shadow the global
+                # and raise UnboundLocalError at __init__ startup (v1.0.2 dock bug).
                 GLib.idle_add(
                     show_error_dialog,
                     f"Config file is locked (another process changing wallpaper). Please try again in a few seconds.\n\nDetails: {e}",
@@ -266,14 +268,19 @@ class WallpaperApp(Gtk.Application):
 
         # Schedule orderly shutdown via Gtk.Application.quit()
         GLib.idle_add(self.quit)
-        return False
+        # Keep source installed until quit completes (return True).
+        return True
 
     def _init_single_instance(self):
         """
         Initialize single instance mechanism using Abstract Unix Domain Socket.
         Returns True if we are the primary instance.
-        If another instance is alive, wake it and exit. If unresponsive, send QUIT and retry.
+        If another instance is alive, wake it and report secondary (no sys.exit here;
+        caller decides how to exit cleanly from within GTK vfuncs).
+        If unresponsive, send QUIT once and retry bind.
         """
+        # Set by probe path so do_startup can quit cleanly instead of sys.exit in vfunc.
+        self._is_secondary_instance = False
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
@@ -299,6 +306,7 @@ class WallpaperApp(Gtk.Application):
                 if e.errno == errno.EADDRINUSE:
                     if attempt == 0:
                         self.logger.info("Another instance is running. Probing it.")
+                        should_try_quit = False
                         try:
                             client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                             client_sock.settimeout(1.0)
@@ -319,31 +327,38 @@ class WallpaperApp(Gtk.Application):
                                 frame_wake.send_message(b"WAKEUP")
                                 wake_sock.close()
 
-                                # Silent exit for secondary instance
-                                sys.exit(0)
+                                # Mark secondary; caller quits cleanly (no sys.exit in vfunc).
+                                self._is_secondary_instance = True
+                                return False
 
                             response_text = response.decode("utf-8", errors="replace") if response else "None"
                             self.logger.warning(
-                                f"Primary instance returned unexpected response: {response_text}. Sending QUIT."
+                                f"Primary instance returned unexpected response: {response_text}. Not sending QUIT; "
+                                "refusing to kill a live owner. If hung, use: pkill -f wallshuffle"
                             )
+                            return False
                         except (socket.timeout, ConnectionRefusedError, OSError) as probe_error:
                             self.logger.warning(
                                 f"Primary instance is unresponsive ({probe_error}). Sending QUIT and retrying bind."
                             )
+                            should_try_quit = True
                         except Exception as e2:
                             self.logger.error(f"Failed to communicate with primary instance: {e2}")
+                            return False
 
-                        # Ask hung/stale owner to exit, then retry bind after a short grace period.
-                        try:
-                            quit_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                            quit_sock.settimeout(1.0)
-                            quit_sock.connect(self.socket_name)
-                            FrameLengthSocket(quit_sock).send_message(b"QUIT")
-                            quit_sock.close()
-                        except Exception as quit_error:
-                            self.logger.debug(f"Could not send QUIT to primary: {quit_error}")
-                        time.sleep(0.35)
-                        continue
+                        if should_try_quit:
+                            # Ask hung/stale owner to exit, then retry bind after a short grace period.
+                            try:
+                                quit_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                                quit_sock.settimeout(1.0)
+                                quit_sock.connect(self.socket_name)
+                                FrameLengthSocket(quit_sock).send_message(b"QUIT")
+                                quit_sock.close()
+                            except Exception as quit_error:
+                                self.logger.debug(f"Could not send QUIT to primary: {quit_error}")
+                            time.sleep(0.35)
+                            continue
+                        return False
 
                     self.logger.error(
                         "Still unable to bind single-instance socket after cleanup attempt. "
@@ -372,7 +387,7 @@ class WallpaperApp(Gtk.Application):
                 if data:
                     if data == b"WAKEUP":
                         self.logger.info("Received WAKEUP command via socket.")
-                        GLib.idle_add(self.present_window)
+                        GLib.idle_add(self.do_activate)
                     elif data == b"QUIT":
                         self.logger.info("Received QUIT command via socket. Shutting down.")
                         GLib.idle_add(self.quit)
@@ -395,10 +410,13 @@ class WallpaperApp(Gtk.Application):
 
         # Check if another instance is running using Sockets
         if not self._init_single_instance():
-            self.logger.info("Exiting because another instance is running.")
-            # Note: We don't call quit() here because we want to exit immediately
-            # and Gtk.Application might not have fully started its main loop yet.
-            sys.exit(0)
+            if getattr(self, "_is_secondary_instance", False):
+                self.logger.info("Secondary instance: primary woken, quitting cleanly.")
+            else:
+                self.logger.info("Exiting because another instance is running or bind failed.")
+            # Never exit via SystemExit inside a GTK vfunc (swallowed/hangs).
+            GLib.idle_add(self.quit)
+            return
 
         # Clean up temp files from previous runs
         self.wallpaper_manager.cleanup_temp_files()
@@ -418,7 +436,12 @@ class WallpaperApp(Gtk.Application):
 
         # Force window activation on startup if not running in change-only mode
         # This ensures visibility even if the OS doesn't send the 'activate' signal
-        GLib.timeout_add(100, self.do_activate)
+        GLib.timeout_add(100, lambda: (self.activate(), False)[1])
+
+    def do_open(self, files, hint, data=None):
+        # Dock/file-manager launches with URIs hit do_open when HANDLES_OPEN is set.
+        # Route to normal activation so a window always appears.
+        self.do_activate()
 
     def do_activate(self):
         self.logger.debug("do_activate called")

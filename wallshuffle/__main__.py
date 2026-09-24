@@ -5,23 +5,25 @@ import os
 import sys
 
 
-def configure_backend():
+def configure_backend() -> bool:
     """
-    Detects the session type and forces X11 backend for GTK3 if running on Wayland.
-    This fixes invisibility/positioning bugs on modern GNOME/KDE.
+    Detects the session type and prefers X11 backend for GTK3 on Wayland.
+    Returns True if X11 was forced (caller may retry native Wayland on failure).
     Can be overridden by setting WALLSHUFFLE_FORCE_WAYLAND=1.
 
     Only needed for the GUI. Headless --change must not force GDK_BACKEND.
     """
     if os.environ.get("WALLSHUFFLE_FORCE_WAYLAND") == "1":
         print("WALLSHUFFLE_FORCE_WAYLAND=1 detected. Not forcing X11 backend.", file=sys.stderr)
-        return
+        return False
 
     session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
     if "wayland" in session_type:
         if "GDK_BACKEND" not in os.environ:
-            print("Wayland detected. Forcing X11 backend for GTK3 stability.", file=sys.stderr)
+            print("Wayland detected. Preferring X11 backend for GTK3 stability.", file=sys.stderr)
             os.environ["GDK_BACKEND"] = "x11"
+            return True
+    return False
 
 
 from . import __version__
@@ -127,16 +129,18 @@ def main():
             logging.shutdown()
             sys.exit(exit_code)
 
-        # GUI path only: force X11 on Wayland for GTK3 stability
-        configure_backend()
+        # GUI path only: prefer X11 on Wayland for GTK3 stability
+        forced_x11 = configure_backend()
 
-        # Preliminary check for a valid graphical environment
+        # Preliminary check for a valid graphical environment.
+        # Accept Wayland-native sessions (WAYLAND_DISPLAY) as well as X11 (DISPLAY).
         display = os.environ.get("DISPLAY")
+        wayland_display = os.environ.get("WAYLAND_DISPLAY")
         dbus = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
 
-        if not display:
-            logging.error("DISPLAY environment variable is not set. GUI cannot start.")
-            print("ERROR: DISPLAY is not set. Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
+        if not display and not wayland_display:
+            logging.error("Neither DISPLAY nor WAYLAND_DISPLAY is set. GUI cannot start.")
+            print("ERROR: No display found (DISPLAY and WAYLAND_DISPLAY unset). Use 'wallshuffle --change' for headless mode.", file=sys.stderr)
             sys.exit(1)
         try:
             import gi
@@ -144,18 +148,27 @@ def main():
             from gi.repository import Gtk
 
             if not Gtk.init_check()[0]:
-                raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
+                # If we forced X11 and XWayland is missing, retry native Wayland once.
+                if forced_x11 and os.environ.get("GDK_BACKEND") == "x11":
+                    logging.warning("Gtk init failed with forced x11 backend; retrying native Wayland.")
+                    print("XWayland init failed. Retrying native Wayland backend.", file=sys.stderr)
+                    os.environ.pop("GDK_BACKEND", None)
+                    if not Gtk.init_check()[0]:
+                        raise RuntimeError("Gtk.init_check() failed on both x11 and Wayland backends.")
+                else:
+                    raise RuntimeError("Gtk.init_check() failed. Cannot connect to display.")
 
-            logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}).")
+            logging.debug(f"Preliminary GTK display check successful (DISPLAY={display}, WAYLAND_DISPLAY={wayland_display}).")
         except Exception as e:
             logging.error(
                 f"Failed to connect to graphical display (GTK initialization failed: {e}). "
-                f"Context: DISPLAY={display}, DBUS={dbus}. "
+                f"Context: DISPLAY={display}, WAYLAND_DISPLAY={wayland_display}, DBUS={dbus}. "
                 "Use 'wallshuffle --change' for headless wallpaper changes."
             )
             print(
                 f"ERROR: Failed to connect to graphical display ({e}).\n"
-                "Tip: Ensure your DISPLAY environment variable is set correctly, "
+                "Tip: Ensure your display environment is available (XWayland for X11 mode, "
+                "or run native Wayland with WALLSHUFFLE_FORCE_WAYLAND=1), "
                 "or use 'wallshuffle --change' to change wallpaper without a GUI.",
                 file=sys.stderr
             )

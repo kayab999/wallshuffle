@@ -4,7 +4,7 @@ set -euo pipefail
 # --- Configuration ---
 APP_NAME="WallShuffle"
 LOWER_APP_NAME="wallshuffle"
-VERSION="1.0.2"
+VERSION="1.0.3"
 VENV_PATH=".venv"
 SPEC_FILE="${LOWER_APP_NAME}.spec"
 ICON_FILE="assets/icon.png"

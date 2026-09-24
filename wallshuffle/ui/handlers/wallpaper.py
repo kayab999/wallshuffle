@@ -15,13 +15,34 @@ from ...utils import CONFIG_DIR
 
 class WallpaperHandlersMixin:
     def update_current_wallpaper_label(self):
+        import fcntl
+        import time as _time
+
         history_file = os.path.join(CONFIG_DIR, "history.log")
         paths = []
         if os.path.exists(history_file):
             try:
                 with open(history_file, "r") as f:
-                    # Read enough lines to cover potential monitors
-                    paths = [line.strip() for line in f.readlines()[:10] if line.strip()]
+                    # Shared lock with timeout: writer holds LOCK_EX 5s (utils.py).
+                    # Prevents torn reads when timer + Next race.
+                    start = _time.monotonic()
+                    acquired = False
+                    while _time.monotonic() - start < 5.0:
+                        try:
+                            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                            acquired = True
+                            break
+                        except (IOError, BlockingIOError, OSError):
+                            _time.sleep(0.05)
+                    try:
+                        # Read enough lines to cover potential monitors
+                        paths = [line.strip() for line in f.readlines()[:10] if line.strip()]
+                    finally:
+                        if acquired:
+                            try:
+                                fcntl.flock(f, fcntl.LOCK_UN)
+                            except OSError:
+                                pass
             except IOError:
                 pass
 
@@ -48,7 +69,7 @@ class WallpaperHandlersMixin:
         if not display_paths:
             return
 
-        def load_thumbnails(paths_to_load):
+        def load_thumbnails(paths_to_load, generation):
             pixbufs = []
             for p in paths_to_load:
                 try:
@@ -61,9 +82,18 @@ class WallpaperHandlersMixin:
                     logging.error(f"Failed to load thumbnail for {p}: {e}")
                     pixbufs.append(None)
 
-            GLib.idle_add(self._update_preview_box, pixbufs)
+            def _apply():
+                # Drop stale generations from rapid Next clicks.
+                if getattr(self, "_thumb_generation", 0) != generation:
+                    return False
+                self._update_preview_box(pixbufs)
+                return False
 
-        threading.Thread(target=load_thumbnails, args=(display_paths,), daemon=True).start()
+            GLib.idle_add(_apply)
+
+        # Generation guard: only latest thumbnail batch may update the preview.
+        self._thumb_generation = getattr(self, "_thumb_generation", 0) + 1
+        threading.Thread(target=load_thumbnails, args=(display_paths, self._thumb_generation), daemon=True).start()
 
     def _update_preview_box(self, pixbufs):
         # Clear again to be safe
