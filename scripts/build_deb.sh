@@ -79,9 +79,23 @@ set -e
 if [ "$1" = "configure" ]; then
     update-desktop-database -q || true
     update-mime-database /usr/share/mime >/dev/null 2>&1 || true
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+    fi
 fi
 EOF
 chmod 755 "$BUILD_DIR/DEBIAN/postinst"
+echo "Creating prerm script (icon cache cleanup on remove)..."
+cat <<'EOF' > "$BUILD_DIR/DEBIAN/prerm"
+#!/bin/bash
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+fi
+EOF
+chmod 755 "$BUILD_DIR/DEBIAN/prerm"
 
 echo "Building .deb package..."
 dpkg-deb --root-owner-group --build "$BUILD_DIR" "$OUT"

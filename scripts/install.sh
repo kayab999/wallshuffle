@@ -127,6 +127,20 @@ elif [ -f "$ICON_FILE" ]; then
 else
     echo "WARNING: $ICON_FILE not found. Icon will be missing."
 fi
+# Hygiene: remove stale 1024px PNG that was incorrectly stored as scalable
+# (scalable/ should hold SVG; tray code prefers it and would pick the wrong file)
+if [ -f "$HOME/.local/share/icons/hicolor/scalable/apps/wallshuffle.png" ]; then
+    # If file is large PNG (>500KB) or not SVG, it's the stale one
+    if [ "$(stat -c%s "$HOME/.local/share/icons/hicolor/scalable/apps/wallshuffle.png" 2>/dev/null || echo 0)" -gt 500000 ]; then
+        echo "Removing stale scalable PNG icon..."
+        rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/wallshuffle.png"
+    fi
+fi
+# Refresh icon cache after rename (wallshuffle -> io.github.kayab999.WallShuffle)
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    echo "Updating icon cache..."
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
 
 # 6. Install Desktop Entry (reverse-DNS primary + legacy compat symlink)
 echo "Configuring desktop entry..."

@@ -59,6 +59,26 @@ class TestPackaging(unittest.TestCase):
         self.assertNotIn("DBusActivatable", desktop)
         self.assertTrue((REPO / "data" / "io.github.kayab999.WallShuffle.png").exists())
 
+    def test_icon_cache_hook_and_search_paths(self):
+        # Install script must refresh icon cache after rename (wallshuffle -> io.github...)
+        install_sh = (REPO / "scripts" / "install.sh").read_text()
+        self.assertIn("gtk-update-icon-cache", install_sh)
+        # deb postinst must also refresh
+        deb_sh = (REPO / "scripts" / "build_deb.sh").read_text()
+        self.assertIn("gtk-update-icon-cache", deb_sh)
+        # App must search correct 256x256 user install paths before scalable fallback
+        app_text = (REPO / "wallshuffle" / "app.py").read_text()
+        self.assertIn("256x256/apps/io.github.kayab999.WallShuffle.png", app_text)
+        self.assertIn("256x256/apps/wallshuffle.png", app_text)
+        # Scalable PNG stale file must be cleaned (install.sh removes large 1024 PNG)
+        self.assertIn("scalable/apps/wallshuffle.png", install_sh)
+        # Icon file for 256 must exist and match assets
+        import hashlib
+
+        assets_md5 = hashlib.md5((REPO / "assets" / "icon.png").read_bytes()).hexdigest()
+        data_md5 = hashlib.md5((REPO / "data" / "io.github.kayab999.WallShuffle.png").read_bytes()).hexdigest()
+        self.assertEqual(assets_md5, data_md5, "data icon must match assets/icon.png")
+
     def test_lazy_init(self):
         text = (REPO / "wallshuffle" / "__init__.py").read_text()
         self.assertIn("__getattr__", text)

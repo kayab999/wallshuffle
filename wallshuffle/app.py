@@ -545,7 +545,9 @@ class WallpaperApp(Gtk.Application):
                 "/usr/share/wallshuffle/icon.png",  # Alternative location
                 "/usr/local/share/pixmaps/wallshuffle.png",  # Local install
                 os.path.join(module_dir, "icon.png"),  # Package internal
-                os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/wallshuffle.png"),  # User install
+                os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/io.github.kayab999.WallShuffle.png"),  # User install 256
+                os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/wallshuffle.png"),  # compat name
+                os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/wallshuffle.png"),  # legacy fallback
             ]
 
             self.logger.debug(f"Searching for icon in {len(search_paths)} locations...")
