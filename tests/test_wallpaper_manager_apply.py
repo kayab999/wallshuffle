@@ -51,9 +51,12 @@ class TestWallpaperManagerApply(unittest.TestCase):
         manager = WallpaperManager()
         # Source 8000x6000 > 2*1920x1080 => should downscale via BILINEAR thumbnail
         large = Image.new("RGB", (8000, 6000))
+        original_size = large.size
         down = manager._downscale_for_canvas(large, 1920, 1080)
+        # Fase 1: in-place now — no copy is made, the same object is mutated.
+        self.assertIs(down, large)
         self.assertLessEqual(max(down.size), 3840)  # 2*1920
-        self.assertLess(down.size[0] * down.size[1], large.size[0] * large.size[1])
+        self.assertLess(down.size[0] * down.size[1], original_size[0] * original_size[1])
         # Small source should return same object (no copy)
         small = Image.new("RGB", (1000, 800))
         same = manager._downscale_for_canvas(small, 1920, 1080)
@@ -61,7 +64,9 @@ class TestWallpaperManagerApply(unittest.TestCase):
 
     @patch.dict("os.environ", {"XDG_CURRENT_DESKTOP": "KDE"}, clear=False)
     @patch("wallshuffle.wallpaper_manager.WallpaperManager._run_subprocess")
-    def test_apply_kde_settings_invokes_dbus(self, mock_run):
+    # Journal is real and would write into the live user temp dir -> patch out.
+    @patch.object(WallpaperManager, "_remember_references")
+    def test_apply_kde_settings_invokes_dbus(self, mock_remember_refs, mock_run):
         mock_run.return_value = (True, "")
         manager = WallpaperManager()
         success, _ = manager.apply_kde_settings("zoom", [self.image_path])

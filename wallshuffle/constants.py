@@ -12,6 +12,13 @@ MAX_EFFECT_DIMENSION = 3840
 # Hardening caps (prevent OOM/swap thrashing on huge multi-monitor or image sets)
 # ~33 MP -> e.g., 8192x4096, 7680x4320 headroom; scales down larger canvases with BILINEAR
 MAX_CANVAS_PIXELS = 33_554_432
+# Limit INPUT image resolution before expensive work (~150 MB decoded RGB at this size).
+# Applies per source image in composition/effects, checked on the lazily opened header
+# (`Image.open` gives size without decoding), so oversized inputs are rejected with a
+# controlled error instead of decoding 300+ MB. MAX_CANVAS_PIXELS caps the output canvas;
+# this caps the decode cost of each input (JPEG draft() blocks JPEG decode, but does not
+# block PNG/BMP/WebP).
+MAX_INPUT_PIXELS = 50_000_000
 MAX_CACHED_IMAGES = 10_000  # limit local discovery to avoid unbounded memory / I/O storms
 WALLPAPER_CHANGE_TIMEOUT_SEC = 30  # watchdog for Next Wallpaper background thread
 

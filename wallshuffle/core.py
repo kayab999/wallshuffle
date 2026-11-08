@@ -5,7 +5,7 @@ import random
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum, auto
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -23,7 +23,7 @@ from .image_discovery import find_images_in_folder
 from .online_sources import OnlineSourceManager
 from .sequential_state import select_sequential_images
 from .utils import CONFIG_DIR, log_wallpaper_history
-from .wallpaper_manager import WallpaperManager
+from .wallpaper_manager import REFERENCES_FILE, REFERENCES_FILE_TMP, WallpaperManager
 
 
 class WallpaperUpdateResult(Enum):
@@ -36,6 +36,101 @@ class WallpaperUpdateResult(Enum):
     CONFIGURATION_ERROR = auto()
     FILE_SYSTEM_ERROR = auto()
     DESKTOP_ENVIRONMENT_ERROR = auto()
+
+
+# --- Transactional temp-dir sweep (Fase 1 + revisión pre-commit) -------------
+# Los cambios descargan a temp/ (~/.config/wallshuffle/temp) y antes solo se
+# limpiaban tras un cambio CON ÉXITO: una serie de fallos acumulaba 50 MB por
+# intento. El sweep corre en `finally`, pero sin borrar lo que el DE todavía
+# referencia: el journal `references.json` (mantenido por WallpaperManager,
+# con un slot por propiedad XFCE / grupo KDE / URI GNOME) registra qué archivo
+# está ALI mostrándose tras cualquier apply — incluyendo fallos parciales cuyo
+# siguiente intento falla en otro monitor. En fallo se conservan los archivos
+# del intento actual (nuevos o sobreescritos) más los que el journal lista.
+# La acumulación queda acotada: cada slot guarda solo su ÚLTIMO valor y los
+# huérfanos que ya nadie referencia se eliminan en el siguiente intento.
+
+_EXCLUDED_TEMP_ENTRIES = {REFERENCES_FILE, REFERENCES_FILE_TMP}
+
+
+def _snapshot_temp_dir(temp_dir: str) -> Dict[str, int]:
+    """Map abs path -> st_mtime_ns per regular file in temp_dir.
+
+    Excludes the reference journal. Returns {} when the directory cannot be
+    read (the sweep then fails safe).
+    """
+    snapshot: Dict[str, int] = {}
+    try:
+        with os.scandir(temp_dir) as entries:
+            for entry in entries:
+                if entry.name in _EXCLUDED_TEMP_ENTRIES:
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    snapshot[os.path.abspath(entry.path)] = entry.stat(follow_symlinks=False).st_mtime_ns
+                except OSError:
+                    continue
+    except OSError as e:
+        logging.debug(f"Could not snapshot temp dir {temp_dir}: {e}")
+    return snapshot
+
+
+def _sweep_temp_files(
+    temp_dir: str,
+    pre_existing: Dict[str, int],
+    success_kept: Optional[Set[str]],
+) -> None:
+    """Trim the temp dir after a change attempt (call from a `finally` block).
+
+    - Success (`success_kept` = the applied wallpaper): keep exactly those
+      files. The reference journal was already rewritten per output slot by
+      the apply code that just ran.
+    - Failure: keep files created/overwritten during this attempt (a partially
+      applied DE config may reference them) plus whatever pre-existing files
+      the reference journal (`references.json`) still lists. If the journal is
+      missing/corrupt, fail safe and keep every pre-existing file. Older orphans
+      that nothing references anymore are removed.
+    """
+    current = _snapshot_temp_dir(temp_dir)
+    if not current and not pre_existing:
+        return
+
+    if success_kept is not None:
+        keep: Set[str] = set(success_kept)
+    else:
+        attempt_new = {
+            path for path, mtime_ns in current.items() if pre_existing.get(path) != mtime_ns
+        }
+        active_refs = WallpaperManager.get_active_reference_paths(temp_dir)
+        if active_refs is None:
+            old_must_survive = {path for path in current if path in pre_existing}
+        else:
+            old_must_survive = {
+                path for path in current if path in pre_existing and path in active_refs
+            }
+        keep = attempt_new | old_must_survive
+
+    removed = 0
+    for path in list(current):
+        if path in keep:
+            continue
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        logging.info(f"Temp sweep: removed {removed} temporary file(s).")
+
+    # Crash residue of the journal writer itself (write happens under the same
+    # flock as this sweep, so an existing .tmp here can only be an orphan).
+    try:
+        stale_refs_tmp = os.path.join(temp_dir, REFERENCES_FILE_TMP)
+        if os.path.exists(stale_refs_tmp):
+            os.remove(stale_refs_tmp)
+    except OSError:
+        pass
 
 
 def change_wallpaper() -> Tuple[WallpaperUpdateResult, str]:
@@ -118,6 +213,31 @@ def change_wallpaper() -> Tuple[WallpaperUpdateResult, str]:
             logging.debug("Released wallpaper change lock.")
 
 def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
+    """Transactional shell for a wallpaper change attempt.
+
+    Snapshots the temp dir before work starts and sweeps it in a `finally`,
+    so every outcome (success, failed apply, early network error) leaves the
+    temp directory bounded instead of accumulating 50 MB per failed attempt.
+    """
+    temp_dir = os.path.join(CONFIG_DIR, "temp")
+    try:
+        os.makedirs(temp_dir, mode=0o700, exist_ok=True)
+    except OSError as e:
+        logging.warning(f"Could not create temp dir: {e}")
+
+    pre_existing = _snapshot_temp_dir(temp_dir)
+    state: Dict[str, Any] = {"success": False, "kept": []}
+    try:
+        return _change_wallpaper_attempt(state)
+    finally:
+        try:
+            kept = {os.path.abspath(p) for p in state["kept"] if p}
+            _sweep_temp_files(temp_dir, pre_existing, kept if state["success"] else None)
+        except Exception:
+            logging.error("Temp sweep failed after wallpaper change.", exc_info=True)
+
+
+def _change_wallpaper_attempt(state: Dict[str, Any]) -> Tuple[WallpaperUpdateResult, str]:
     config_manager = get_config_manager()
     # Fase 1: captura excepción controlada de lock timeout para distinguir de config corrupta
     try:
@@ -294,6 +414,12 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
             if content_length is not None:
                 try:
                     if int(content_length) > MAX_DOWNLOAD_BYTES:
+                        # Early return before the download try/finally: close the
+                        # connection explicitly instead of leaking the socket.
+                        try:
+                            response.close()
+                        except Exception:
+                            pass
                         return (
                             WallpaperUpdateResult.NETWORK_ERROR,
                             f"Remote image exceeds maximum allowed size ({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB).",
@@ -413,24 +539,11 @@ def _change_wallpaper_impl() -> Tuple[WallpaperUpdateResult, str]:
     success, error_message = manager.apply_desktop_settings(mode, final_image_paths, background_color)
 
     if success:
-        # Proactive Safe Temp File Cleanup
-        try:
-            temp_dir = os.path.join(CONFIG_DIR, "temp")
-            if os.path.exists(temp_dir):
-                kept_files = set(os.path.abspath(p) for p in final_image_paths if p)
-                cleaned_count = 0
-                for filename in os.listdir(temp_dir):
-                    file_path = os.path.abspath(os.path.join(temp_dir, filename))
-                    if file_path not in kept_files:
-                        try:
-                            os.remove(file_path)
-                            cleaned_count += 1
-                        except OSError:
-                            pass
-                if cleaned_count > 0:
-                    logging.info(f"Cleaned up {cleaned_count} old temporary file(s).")
-        except Exception as e:
-            logging.error(f"Failed to clean up old temp files safely: {e}")
+        # Hand the applied files to the transactional sweep (finally in
+        # _change_wallpaper_impl): it enforces "keep only the applied wallpaper"
+        # and records the retention manifest used by later failed attempts.
+        state["success"] = True
+        state["kept"] = [p for p in final_image_paths if p]
 
         logging.info("--- change_wallpaper finished successfully ---")
         return (WallpaperUpdateResult.SUCCESS, "")

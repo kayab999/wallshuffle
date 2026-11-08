@@ -28,7 +28,9 @@ class TestWallpaperManagerDE(unittest.TestCase):
     @patch.dict("os.environ", {"XDG_CURRENT_DESKTOP": "GNOME"}, clear=False)
     @patch("wallshuffle.wallpaper_manager.WallpaperManager._run_subprocess")
     @patch("wallshuffle.wallpaper_manager.subprocess.run")
-    def test_gnome_settings_validates_schema(self, mock_run, mock_subprocess_helper):
+    # Journal is real and would write into the live user temp dir -> patch out.
+    @patch.object(WallpaperManager, "_remember_references")
+    def test_gnome_settings_validates_schema(self, mock_remember_refs, mock_run, mock_subprocess_helper):
         schema_result = MagicMock()
         schema_result.returncode = 0
         mock_run.return_value = schema_result
@@ -41,7 +43,9 @@ class TestWallpaperManagerDE(unittest.TestCase):
 
     @patch("wallshuffle.wallpaper_manager.WallpaperManager._run_subprocess")
     @patch("wallshuffle.wallpaper_manager.subprocess.run")
-    def test_mate_uses_picture_filename(self, mock_run, mock_subprocess_helper):
+    # Journal is real and would write into the live user temp dir -> patch out.
+    @patch.object(WallpaperManager, "_remember_references")
+    def test_mate_uses_picture_filename(self, mock_remember_refs, mock_run, mock_subprocess_helper):
         schema_result = MagicMock()
         schema_result.returncode = 0
         mock_run.return_value = schema_result

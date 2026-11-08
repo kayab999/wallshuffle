@@ -4,7 +4,7 @@ import os
 
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 
-from .constants import MAX_EFFECT_DIMENSION, ImageEffect
+from .constants import MAX_EFFECT_DIMENSION, MAX_INPUT_PIXELS, ImageEffect
 from .utils import CONFIG_DIR
 
 
@@ -26,6 +26,17 @@ def apply_image_effect(image_path, effect_type):
 
     try:
         with Image.open(image_path) as opened:
+            try:
+                width, height = opened.size
+            except Exception:
+                width, height = 0, 0
+            if width * height > MAX_INPUT_PIXELS:
+                logging.error(
+                    f"Input image {width}x{height} ({width * height / 1_000_000:.1f} MP) exceeds the "
+                    f"{MAX_INPUT_PIXELS / 1_000_000:.0f} MP input cap (MAX_INPUT_PIXELS); "
+                    "skipping effect to bound decode memory."
+                )
+                return image_path
             # Fase 3: corrige EXIF orientation antes de downscale/effect
             try:
                 opened = ImageOps.exif_transpose(opened) or opened

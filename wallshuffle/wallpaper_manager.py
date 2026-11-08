@@ -13,7 +13,21 @@ import gi
 from PIL import Image, ImageOps
 
 # Deferred imports for Gdk/GLib to avoid crashes in headless environments
-from .constants import GNOME_COMPAT, MAX_CANVAS_PIXELS
+from .constants import GNOME_COMPAT, MAX_CANVAS_PIXELS, MAX_INPUT_PIXELS
+from .utils import CONFIG_DIR
+
+# Reference journal: live map of what the desktop-environment config points at
+# (one slot per XFCE property, KDE desktop group or GNOME/MATE URI). The
+# transactional temp sweep in core.py consults it before deleting pre-existing
+# temp files, so wallpapers still displayed after a PARTIAL apply (XFCE writes
+# properties sequentially and fails per property) are never deleted.
+REFERENCES_FILE = "references.json"
+REFERENCES_FILE_TMP = "references.json.tmp"
+
+
+def _temp_dir_path() -> str:
+    """Temp dir for WallpaperManager artifacts (module fn so tests can patch)."""
+    return os.path.join(CONFIG_DIR, "temp")
 
 
 class WallpaperManager:
@@ -71,6 +85,66 @@ class WallpaperManager:
                 self.logger.critical(f"CRITICAL: Required system tool '{tool}' not found! Wallpaper changing will likely fail.")
             else:
                 self.logger.debug(f"Found required tool: {tool}")
+
+    # --- Reference journal (XFCE partial-failure retention) ---------------------
+
+    def _remember_references(self, slot: str, paths: List[str]) -> None:
+        """Record which output slot currently points at which files.
+
+        Slots are REPLACED on write; slots not touched during a partial apply
+        keep their previous reference, which is exactly what keeps wallpapers
+        that a later sweep must not delete alive. KDE/GNOME write on success;
+        XFCE writes after EACH successful property edit (partial applies are
+        journaled per property). Writers run under the wallpaper-change flock,
+        so read-modify-write is serialized.
+        """
+        abs_paths = sorted({os.path.abspath(p) for p in paths if p})
+        try:
+            temp_dir = _temp_dir_path()
+            os.makedirs(temp_dir, mode=0o700, exist_ok=True)
+            targets: Dict[str, List[str]] = {}
+            existing = self._read_references_dict(temp_dir)
+            if isinstance(existing, dict) and isinstance(existing.get("slots"), dict):
+                targets = existing["slots"]
+            # An empty slot list is meaningful: "this output holds no temp path"
+            # (normal GNOME success uses the isolated desktop cache copy).
+            targets[slot] = abs_paths
+            tmp_path = os.path.join(temp_dir, REFERENCES_FILE_TMP)
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump({"slots": targets}, handle)
+            os.replace(tmp_path, os.path.join(temp_dir, REFERENCES_FILE))
+        except Exception as e:
+            self.logger.warning(f"Could not update wallpaper reference journal: {e}")
+
+    @staticmethod
+    def _read_references_dict(temp_dir: str) -> dict | None:
+        try:
+            with open(os.path.join(temp_dir, REFERENCES_FILE), "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def get_active_reference_paths(temp_dir: str | None = None) -> set[str] | None:
+        """Union of files the DE config currently references, or None if unknown.
+
+        Called by core's temp sweep before deleting pre-existing files.
+        None means journal missing/corrupt: the caller must fail safe and keep
+        every pre-existing temp file (we cannot tell which is still displayed).
+        """
+        if temp_dir is None:
+            temp_dir = _temp_dir_path()
+        data = WallpaperManager._read_references_dict(temp_dir)
+        if not isinstance(data, dict) or not isinstance(data.get("slots"), dict):
+            return None
+        refs: set[str] = set()
+        for paths in data["slots"].values():
+            if isinstance(paths, list):
+                for path in paths:
+                    if isinstance(path, str) and path:
+                        refs.add(os.path.abspath(path))
+        return refs
 
     def cleanup_temp_files(self):
         """Removes temporary files to prevent accumulation."""
@@ -393,16 +467,41 @@ class WallpaperManager:
 
     @staticmethod
     def _downscale_for_canvas(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-        """Pre-downscale huge source images with BILINEAR before expensive LANCZOS, to save RAM/CPU."""
+        """Pre-downscale huge source images with BILINEAR before expensive LANCZOS, to save RAM/CPU.
+
+        Mutates and returns `img` in place. Callers open source images with
+        `Image.open` inside a `with` block and do not share the object, so no
+        defensive copy is needed: a 100MP source is never held twice in RAM,
+        and lazily-opened JPEGs can be `draft()`-decoded at reduced resolution.
+        """
         # If source is >2x target in either dimension, do a fast BILINEAR thumbnail first.
         src_w, src_h = img.size
         if src_w > target_w * 2 or src_h > target_h * 2:
-            # Work on a copy to avoid mutating original if Image is shared
-            img_copy = img.copy()
-            # Use BILINEAR for speed on large downscales; preserve aspect
-            img_copy.thumbnail((target_w * 2, target_h * 2), Image.Resampling.BILINEAR)
-            return img_copy
+            # In-place: img.copy() would double peak RAM exactly when trying to reduce it.
+            # thumbnail() preserves aspect and applies draft() internally for JPEG sources.
+            img.thumbnail((target_w * 2, target_h * 2), Image.Resampling.BILINEAR)
         return img
+
+    def _exceeds_input_limit(self, img: Image.Image) -> bool:
+        """True when decoding this source would exceed MAX_INPUT_PIXELS.
+
+        Reads only the open header (no decode), so the check is cheap. The cap
+        is uniform across formats: JPEG draft() blocks JPEG decoding, but it is
+        a no-op for PNG/BMP/WebP, where a 100 MP source would decode ~300 MB.
+        """
+        try:
+            width, height = img.size
+        except Exception:
+            return False
+        pixels = width * height
+        if pixels <= MAX_INPUT_PIXELS:
+            return False
+        self.logger.error(
+            f"Input image {width}x{height} ({pixels / 1_000_000:.1f} MP) exceeds the "
+            f"{MAX_INPUT_PIXELS / 1_000_000:.0f} MP input cap (MAX_INPUT_PIXELS); "
+            "skipping processing to bound decode memory."
+        )
+        return True
 
     def create_composite_image(self, image_path, monitor_info):
         """Creates a single large image spanning all monitors."""
@@ -420,13 +519,17 @@ class WallpaperManager:
 
         try:
             with Image.open(image_path) as original_img:
+                if self._exceeds_input_limit(original_img):
+                    return image_path
+                # Pre-downscale FIRST and in place (Fase 1: sin img.copy()): thumbnail()
+                # aplica draft() internamente a JPEG no decodificados, y la corrección
+                # EXIF y el resto de operaciones trabajan luego sobre la imagen pequeña.
+                original_img = self._downscale_for_canvas(original_img, max_x, max_y)
                 # Fase 3: corrige orientación EXIF antes de compositing
                 try:
                     original_img = ImageOps.exif_transpose(original_img) or original_img
                 except Exception:
                     pass
-                # Fast pre-downscale if source is massive
-                original_img = self._downscale_for_canvas(original_img, max_x, max_y)
                 target_aspect = max_x / max_y
                 original_aspect = original_img.width / original_img.height
 
@@ -499,15 +602,15 @@ class WallpaperManager:
 
                 try:
                     with Image.open(img_path) as img:
+                        if self._exceeds_input_limit(img):
+                            # Same policy as processing errors: next monitor,
+                            # leaving that monitor with the canvas background.
+                            continue
                         target_w = monitor["width"]
                         target_h = monitor["height"]
-                        # Fase 3: corrige EXIF orientation
-                        try:
-                            img = ImageOps.exif_transpose(img) or img
-                        except Exception:
-                            pass
-
-                        # Fast BILINEAR pre-downscale for huge sources (saves RAM/CPU before LANCZOS)
+                        # Pre-downscale FIRST and in place (Fase 1: sin img.copy()): thumbnail()
+                        # puede aplicar draft() a JPEG aún no decodificados, y nunca mantenemos
+                        # original y copia simultáneamente en RAM.
                         if mode in ("zoom", "scaled", "stretched", "spanned"):
                             img = self._downscale_for_canvas(img, target_w, target_h)
                         elif mode == "centered":
@@ -515,6 +618,12 @@ class WallpaperManager:
                             # (avoid mutating semantics but prevent OOM on 50MP sources)
                             if img.width > target_w * 3 or img.height > target_h * 3:
                                 img = self._downscale_for_canvas(img, target_w, target_h)
+
+                        # Fase 3: corrige orientación EXIF antes de compositing
+                        try:
+                            img = ImageOps.exif_transpose(img) or img
+                        except Exception:
+                            pass
 
                         img_ratio = img.width / img.height
                         target_ratio = target_w / target_h
@@ -562,28 +671,11 @@ class WallpaperManager:
                             final_img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
                         elif mode == "centered":
-                            # Centered: No resizing, just crop or center
-                            # Create black background
-                            bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
-                            # Calculate offset to center the original image
-                            offset_x = (target_w - img.width) // 2
-                            offset_y = (target_h - img.height) // 2
-                            bg.paste(img, (offset_x, offset_y))
-                            final_img = bg # If image is larger, paste creates crop effect naturally?
-                            # PIL paste handles larger images by cropping them, but only if we paste onto a canvas
-                            # However, if offset is negative (image larger), we need to crop the image first
-                            if offset_x < 0 or offset_y < 0:
-                                # Logic to crop center of image to fit monitor
-                                # But standard "center" usually just shows center pixels.
-                                # Let's stick to simple paste, but we might need to crop if image > monitor
-                                # Actually `paste` does not crop automatically in a way that centers.
-                                # It just pastes top-left at the given coordinate.
-                                # If coordinate is negative, it pastes off-canvas.
-                                pass
-                            # Re-doing Center logic to be robust:
+                            # Centered: no scaling; center-crop when larger, center on
+                            # black background otherwise
                             bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
 
-                            # Caclulate crop from source image if it's larger than target
+                            # Calculate crop from source image if it's larger than target
                             if img.width > target_w:
                                 left = (img.width - target_w) // 2
                                 img_crop_w = img.crop((left, 0, left + target_w, img.height))
@@ -603,14 +695,9 @@ class WallpaperManager:
                             final_img = bg
 
                         elif mode == "spanned":
-                             # Spanned on a per-monitor basis acts like zoom/cover usually
-                             final_img = img.resize((target_w, target_h), Image.Resampling.LANCZOS) # Fallback to stretch/zoom?
-                             # Actually spanned usually means one big image across all.
-                             # But here we are in "Different image on each monitor" flow.
-                             # So "spanned" doesn't make sense per monitor. Treat as zoom.
-                             # Reuse Zoom logic (condensed for brevity, or just call it recursively? No, infinite loop risk)
-                             # Just duplicate zoom logic or fallthrough to zoom default
-                             # Let's fallback to zoom
+                             # Spanned in the "different image on each monitor" flow does not
+                             # make sense per monitor (single-image spans are composited by
+                             # create_composite_image). Fallback to zoom/cover behavior.
                              img_ratio = img.width / img.height
                              target_ratio = target_w / target_h
                              if img_ratio > target_ratio:
@@ -778,6 +865,9 @@ class WallpaperManager:
                 return False, error_msg
 
         # Image URI: copy into an isolated desktop/ cache (do not purge Unsplash files).
+        # used_temp_uri tracks the fallback where the copy fails and the DE ends up
+        # pointing directly at a temp file: the journal must then protect it.
+        used_temp_uri = False
         try:
             cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "wallshuffle", "desktop")
             os.makedirs(cache_dir, mode=0o700, exist_ok=True)
@@ -818,6 +908,7 @@ class WallpaperManager:
         except Exception as e:
             self.logger.warning(f"Failed to cache image, using original path: {e}")
             local_path = final_path
+            used_temp_uri = True
 
         resolved_path = str(Path(local_path).resolve())
         uri = Path(resolved_path).as_uri()
@@ -833,6 +924,8 @@ class WallpaperManager:
                     f"CRITICAL: Failed to set MATE wallpaper path via gsettings. Schema: {schema}. Error: {error_msg}"
                 )
                 return False, error_msg
+            # MATE reads the file path directly from gsettings; journal it.
+            self._remember_references("mate-uri", [resolved_path])
             return True, ""
 
         # Force GNOME/Cinnamon to reload even if a previous URI was sticky.
@@ -850,6 +943,10 @@ class WallpaperManager:
             if not dark_ok:
                 self.logger.warning(f"Failed to set dark-mode URI (non-fatal). Error: {dark_error_msg}")
 
+        # GNOME/Cinnamon renders from the isolated desktop cache copy, so its URI
+        # normally references no temp file; journaled as empty slot. When the
+        # cache copy failed, the URI references the original (possibly temp) path.
+        self._remember_references("uri", [resolved_path] if used_temp_uri else [])
         return True, ""
 
     def _generate_kde_script(self, image_paths, mode):
@@ -895,6 +992,9 @@ class WallpaperManager:
             "dbus-send", "--session", "--dest=org.kde.plasmashell", "--type=method_call",
             "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", f"string:{script}"
         ], "kde script")
+        if success:
+            # The Plasma config now references these paths per desktop.
+            self._remember_references("kde", list(image_paths))
         return success, error_msg
 
     def apply_xfce_settings(self, mode, image_paths=None, background_color=None):
@@ -940,6 +1040,10 @@ class WallpaperManager:
                 success, error_msg = self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", img_path], f"xfce image {i}")
                 if not success:
                     return False, error_msg
+                # Journal per property: XFCE applies sequentially, and a later
+                # failure may leave earlier properties pointing at THESE files
+                # while untouched properties still reference the previous ones.
+                self._remember_references(prop, [img_path])
 
             for prop in style_props:
                  success, error_msg = self._run_subprocess(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", style], "xfce style")

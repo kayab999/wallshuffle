@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -110,6 +111,59 @@ class TestImageIndex(unittest.TestCase):
                     os.remove(os.path.join(self.root, f"extra_{i}.bmp"))
                 except OSError:
                     pass
+
+
+    def test_store_is_atomic_no_tmp_leftovers(self):
+        with patch("wallshuffle.image_index.INDEX_CACHE_DIR", self.cache_dir):
+            images = sorted(
+                os.path.join(self.root, name) for name in ("a.jpg", "b.png")
+            )
+            store_cached_images(self.root, False, images)
+            names = os.listdir(self.cache_dir)
+            self.assertEqual(len(names), 1)
+            self.assertFalse(names[0].endswith(".tmp"))
+
+    def test_cleanup_folder_index_cache_expires_old_entries(self):
+        import wallshuffle.image_index as idx_mod
+
+        with patch("wallshuffle.image_index.INDEX_CACHE_DIR", self.cache_dir):
+            store_cached_images(
+                self.root,
+                False,
+                sorted(os.path.join(self.root, n) for n in ("a.jpg", "b.png")),
+            )
+            fresh_path = os.path.join(self.cache_dir, os.listdir(self.cache_dir)[0])
+            self.assertTrue(os.path.isfile(fresh_path))
+            stale_path = fresh_path + ".stale.json"
+            with open(stale_path, "w") as handle:
+                handle.write('{"keep": []}')
+            old_time = time.time() - 10 * 24 * 3600
+            os.utime(stale_path, (old_time, old_time))
+
+            with patch.object(idx_mod, "INDEX_CACHE_TTL_HOURS", 1):
+                removed, _ = idx_mod.cleanup_folder_index_cache()
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(os.path.exists(stale_path))
+            self.assertTrue(os.path.exists(fresh_path))
+
+    def test_cleanup_folder_index_cache_caps_file_count(self):
+        import wallshuffle.image_index as idx_mod
+
+        with patch("wallshuffle.image_index.INDEX_CACHE_DIR", self.cache_dir):
+            os.makedirs(self.cache_dir, exist_ok=True)
+            for i, age in enumerate((600, 400, 200)):
+                path = os.path.join(self.cache_dir, f"idx_{i}.json")
+                with open(path, "w") as handle:
+                    handle.write("{}")
+                os.utime(path, (time.time() - age, time.time() - age))
+
+            with patch.object(idx_mod, "INDEX_CACHE_MAX_FILES", 2):
+                removed, _ = idx_mod.cleanup_folder_index_cache()
+
+            self.assertEqual(removed, 1)
+            remaining = sorted(os.listdir(self.cache_dir))
+            self.assertEqual(remaining, ["idx_1.json", "idx_2.json"])
 
 
 if __name__ == "__main__":

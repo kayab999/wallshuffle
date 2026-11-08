@@ -418,9 +418,6 @@ class WallpaperApp(Gtk.Application):
             GLib.idle_add(self.quit)
             return
 
-        # Clean up temp files from previous runs
-        self.wallpaper_manager.cleanup_temp_files()
-
         try:
             self.create_status_icon()
         except Exception as e:

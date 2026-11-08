@@ -12,6 +12,75 @@ from .utils import CACHE_DIR
 
 INDEX_CACHE_DIR = os.path.join(CACHE_DIR, "folder_index")
 
+# Folder index retention policy (independent from the photo cache policy):
+# TTL by file mtime plus count/space caps. Each index is small (paths list in
+# JSON), but a stale index is never cleaned today, so old folders accumulate.
+INDEX_CACHE_TTL_HOURS = 24 * 7
+INDEX_CACHE_MAX_FILES = 64
+INDEX_CACHE_MAX_BYTES = 32 * 1024 * 1024
+
+
+def cleanup_folder_index_cache() -> Tuple[int, int]:
+    """Expire and cap folder index JSON files. Returns (removed_count, freed_bytes)."""
+    if not os.path.isdir(INDEX_CACHE_DIR):
+        return (0, 0)
+
+    try:
+        entries: List[Dict[str, Any]] = []
+        try:
+            for name in os.listdir(INDEX_CACHE_DIR):
+                path = os.path.join(INDEX_CACHE_DIR, name)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    stat = os.stat(path)
+                    entries.append({"path": path, "size": stat.st_size, "mtime": stat.st_mtime})
+                except OSError:
+                    continue
+        except OSError as error:
+            logging.warning(f"Could not list folder index cache: {error}")
+            return (0, 0)
+
+        removed = 0
+        freed = 0
+
+        # 1. TTL: drop indexes written more than INDEX_CACHE_TTL_HOURS ago.
+        now = time.time()
+        expiration_seconds = INDEX_CACHE_TTL_HOURS * 3600
+        survivors: List[Dict[str, Any]] = []
+        for entry in entries:
+            if (now - entry["mtime"]) > expiration_seconds:
+                try:
+                    os.remove(entry["path"])
+                    removed += 1
+                    freed += entry["size"]
+                except OSError:
+                    survivors.append(entry)
+            else:
+                survivors.append(entry)
+
+        # 2. Caps: number of files and total space, oldest first.
+        if len(survivors) > INDEX_CACHE_MAX_FILES or sum(e["size"] for e in survivors) > INDEX_CACHE_MAX_BYTES:
+            survivors.sort(key=lambda e: e["mtime"])
+            while survivors and (
+                len(survivors) > INDEX_CACHE_MAX_FILES
+                or sum(e["size"] for e in survivors) > INDEX_CACHE_MAX_BYTES
+            ):
+                entry = survivors.pop(0)
+                try:
+                    os.remove(entry["path"])
+                    removed += 1
+                    freed += entry["size"]
+                except OSError:
+                    break
+
+        if removed:
+            logging.info(f"Folder index cleanup: removed {removed} entries, freed {freed} bytes.")
+        return (removed, freed)
+    except Exception as e:
+        logging.debug(f"Folder index cleanup failed: {e}")
+        return (0, 0)
+
 
 def _has_supported_extension(filename: str) -> bool:
     return os.path.splitext(filename)[1].lower() in SUPPORTED_EXTENSIONS
@@ -222,12 +291,19 @@ def store_cached_images(
         "images": usable,
     }
     cache_file = _cache_path(folder, recursive)
+    tmp_path = cache_file + ".tmp"
     try:
-        with open(cache_file, "w", encoding="utf-8") as handle:
+        # Atomic write: readers never observe a truncated/partial JSON entry.
+        with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(entry, handle)
+        os.replace(tmp_path, cache_file)
         logging.debug(f"Stored folder index cache for {folder} ({len(usable)} images)")
     except OSError as error:
         logging.warning(f"Could not write folder index cache for {folder}: {error}")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def invalidate_folder_cache(folder: str, recursive: Optional[bool] = None) -> None:

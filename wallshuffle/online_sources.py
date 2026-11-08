@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import time
 from typing import Any, Optional, Tuple
 from urllib.parse import quote_plus
@@ -14,6 +15,15 @@ from urllib3.util.retry import Retry
 
 from .constants import CACHE_EXPIRATION_HOURS, MAX_DOWNLOAD_BYTES, WALLPAPER_CHANGE_TIMEOUT_SEC
 from .utils import CACHE_DIR, CONFIG_DIR
+
+# Prefix of the mkstemp files used for atomic cache writes. cleanup_old_cache
+# purges leftovers of writes interrupted by a crash (killed between write and
+# os.replace): no cache key ever references these names, so they would linger
+# forever otherwise.
+TMP_WALL_CACHE_PREFIX = ".tmp_wall_"
+# An in-progress atomic write lives for milliseconds; anything with this
+# prefix older than an hour can only be a crash leftover.
+TMP_WALL_LEFTOVER_MIN_AGE_SECONDS = 3600
 
 
 class UnsplashConfigError(Exception):
@@ -97,6 +107,12 @@ class OnlineSourceManager:
             age_hours = (time.time() - file_time) / 3600
 
             if age_hours < CACHE_EXPIRATION_HOURS:
+                try:
+                    # LRU real: refresh mtime on reuse so cleanup_old_cache keeps
+                    # hot entries alive instead of evicting them FIFO by write date.
+                    os.utime(cache_path, None)
+                except OSError:
+                    pass
                 logging.info(f"Using cached Unsplash image: {cache_path}")
                 return cache_path
             else:
@@ -109,22 +125,43 @@ class OnlineSourceManager:
         return None
 
     def _save_image_to_cache(self, image_data: bytes, keywords: str, index: int = 0) -> None:
-        """Saves downloaded image data to cache directory."""
+        """Saves downloaded image data to cache directory (atomic write)."""
         filename = self._get_cache_key(keywords, index)
         cache_path = os.path.join(CACHE_DIR, filename)
         try:
-            with open(cache_path, "wb") as f:
-                f.write(image_data)
-        except IOError as e:
+            fd, tmp_path = tempfile.mkstemp(prefix=TMP_WALL_CACHE_PREFIX, suffix=".jpg", dir=CACHE_DIR)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(image_data)
+                os.replace(tmp_path, cache_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
             logging.error(f"Failed to save image to cache: {e}")
 
     def _save_image_file_to_cache(self, source_path: str, keywords: str, index: int = 0) -> None:
-        """Copies downloaded image file to cache directory."""
+        """Copies downloaded image file to cache directory (atomic write)."""
         filename = self._get_cache_key(keywords, index)
         cache_path = os.path.join(CACHE_DIR, filename)
         try:
-            shutil.copy2(source_path, cache_path)
-        except IOError as e:
+            fd, tmp_path = tempfile.mkstemp(prefix=TMP_WALL_CACHE_PREFIX, suffix=".jpg", dir=CACHE_DIR)
+            os.close(fd)
+            try:
+                # copy2 preserves metadata; replace() makes the cache entry visible
+                # atomically (readers never observe a half-written JPEG).
+                shutil.copy2(source_path, tmp_path)
+                os.replace(tmp_path, cache_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
             logging.error(f"Failed to copy image to cache: {e}")
 
     def fetch_unsplash_wallpaper(self, keywords: str, index: int = 0) -> Tuple[Optional[str], str]:
@@ -176,7 +213,6 @@ class OnlineSourceManager:
 
             temp_dir = os.path.join(CONFIG_DIR, "temp")
             os.makedirs(temp_dir, mode=0o700, exist_ok=True)
-            import tempfile
 
             tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir=temp_dir)
             downloaded = 0
@@ -338,11 +374,20 @@ class OnlineSourceManager:
                     except OSError:
                         continue
 
-            # 1. Primero eliminar archivos expirados (por tiempo)
+            # 1. Primero eliminar archivos expirados (por tiempo). También se
+            # eliminan aquí los cadáveres de escrituras atómicas interrumpidas
+            # (prefijo TMP_WALL_CACHE_PREFIX): ese prefijo solo existe durante
+            # una escritura en curso (milisegundos entre mkstemp y replace),
+            # así que con edad > 1 h solo puede ser un restos de crash.
             removed_count = 0
             remaining_files = []
+            stale_tmp_prefix = os.path.join(CACHE_DIR, TMP_WALL_CACHE_PREFIX)
             for item in files_data:
-                if (now - item["mtime"]) > expiration_seconds:
+                expired = (now - item["mtime"]) > expiration_seconds
+                stale_tmp = item["path"].startswith(stale_tmp_prefix) and (
+                    now - item["mtime"]
+                ) > TMP_WALL_LEFTOVER_MIN_AGE_SECONDS
+                if expired or stale_tmp:
                     try:
                         os.remove(item["path"])
                         removed_count += 1
@@ -378,6 +423,15 @@ class OnlineSourceManager:
 
                     if purged_count > 0:
                         logging.info(f"Cache cleanup (LRU): Purged {purged_count} files ({purged_size / (1024*1024):.1f} MB) to stay under {max_size_mb} MB.")
+
+            # Folder index cache has its own retention policy (TTL + count/space
+            # caps); it lives in a subdirectory the listing above does not touch.
+            try:
+                from .image_index import cleanup_folder_index_cache
+
+                cleanup_folder_index_cache()
+            except Exception:
+                logging.debug("Folder index cache cleanup skipped.", exc_info=True)
 
         except Exception as e:
             logging.error(f"Error during cache cleanup: {e}")

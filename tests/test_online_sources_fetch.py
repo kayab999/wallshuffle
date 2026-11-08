@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -57,11 +58,35 @@ class TestOnlineSourcesFetch(unittest.TestCase):
         old_time = 0
         os.utime(old_file, (old_time, old_time))
 
-        with patch("wallshuffle.online_sources.CACHE_DIR", cache_dir):
-            with patch("wallshuffle.online_sources.CACHE_EXPIRATION_HOURS", 1):
-                OnlineSourceManager.cleanup_old_cache(max_size_mb=500)
+        with patch("wallshuffle.online_sources.CACHE_DIR", cache_dir), \
+                patch("wallshuffle.online_sources.CACHE_EXPIRATION_HOURS", 1), \
+                patch("wallshuffle.image_index.INDEX_CACHE_DIR",
+                      os.path.join(self.temp_dir.name, "folder_index")):
+            OnlineSourceManager.cleanup_old_cache(max_size_mb=500)
 
         self.assertFalse(os.path.exists(old_file))
+
+    def test_cleanup_old_cache_purges_stale_tmp_wall_files(self):
+        """Crash leftovers of atomic cache writes are purged; live writes not."""
+        cache_dir = os.path.join(self.temp_dir.name, "cache2")
+        os.makedirs(cache_dir, exist_ok=True)
+        stale_tmp = os.path.join(cache_dir, ".tmp_wall_stale.jpg")
+        fresh_tmp = os.path.join(cache_dir, ".tmp_wall_fresh.jpg")
+        keep = os.path.join(cache_dir, "cached_key.jpg")
+        for path in (stale_tmp, fresh_tmp, keep):
+            with open(path, "w") as handle:
+                handle.write("x")
+        old_time = time.time() - 7200
+        os.utime(stale_tmp, (old_time, old_time))
+
+        idx_dir = os.path.join(self.temp_dir.name, "folder_index2")
+        with patch("wallshuffle.online_sources.CACHE_DIR", cache_dir), \
+                patch("wallshuffle.image_index.INDEX_CACHE_DIR", idx_dir):
+            OnlineSourceManager.cleanup_old_cache(max_size_mb=500)
+
+        self.assertFalse(os.path.exists(stale_tmp), "stale .tmp_wall_ crash leftover")
+        self.assertTrue(os.path.exists(fresh_tmp), "in-progress write < 1 h must survive")
+        self.assertTrue(os.path.exists(keep))
 
     def test_test_api_connection_unauthorized(self):
         self.manager.session = MagicMock()
