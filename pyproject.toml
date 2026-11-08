@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wallshuffle"
-version = "1.0.3"
+version = "1.0.4"
 description = "A GTK-based wallpaper changer for Linux desktops."
 readme = "README.md"
 authors = [

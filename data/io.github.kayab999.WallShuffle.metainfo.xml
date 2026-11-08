@@ -22,6 +22,17 @@
   <url type="homepage">https://github.com/kayab999/wallshuffle</url>
   <url type="bugtracker">https://github.com/kayab999/wallshuffle/issues</url>
   <releases>
+    <release version="1.0.4" date="2026-11-07">
+      <description>
+        <p>Memory &amp; temp lifecycle remediation.</p>
+        <ul>
+          <li>Transactional temp sweep with per-output reference journal (XFCE partial applies kept alive)</li>
+          <li>50 MP input cap on composition/effects paths (bounded decode cost)</li>
+          <li>Lower peak RAM: in-place downscale with draft() before EXIF correction</li>
+          <li>Atomic cache/index writes, real LRU eviction, crash-leftover purge</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-09-24">
       <description>
         <p>Dock-launch fix release.</p>

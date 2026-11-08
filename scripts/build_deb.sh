@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="wallshuffle"
-VERSION="1.0.3"
+VERSION="1.0.4"
 ARCH="all"
 BUILD_DIR="build_deb"
 OUT="${APP_NAME}_${VERSION}_${ARCH}.deb"

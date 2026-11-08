@@ -1,5 +1,23 @@
 # Changelog - WallShuffle
 
+## [1.0.4] - 2026-11-07
+### Fixed — Memory & Temp Lifecycle Remediation
+- **Transactional temp sweep:** `change_wallpaper()` snapshots `temp/` before the attempt and sweeps in `finally` on every outcome. Success keeps only the applied files; failures keep the current attempt's outputs plus whatever `references.json` (one slot per XFCE property / KDE group / GNOME-MATE URI) still lists. A run of failed applies no longer accumulates ~50 MB per attempt.
+- **Partial applications (XFCE):** per-property journal slots — wallpapers already applied to some monitors survive later failures at other monitors (S/A/B/C sequence covered by tests; bounded: one failed generation + live references).
+- **Input cap:** `MAX_INPUT_PIXELS = 50 MP` on `create_composite_image`, `create_multi_monitor_composite` (skips monitor, keeps canvas background) and `effects.apply_image_effect`. Checked on the lazily-opened header (no decode) with a controlled error message. Cap-eligible 40 MP input E2E peak 331 MB; isolated 96 MP downscale benchmark 904 → 534 MB (Δ ≈ 369 MiB, ~41%).
+- **EXIF safety:** in-place `thumbnail()` runs before `exif_transpose` (keeps the JPEG `draft()` optimization); regression tests for EXIF 6 / EXIF 8 / no-EXIF JPEG / PNG assert final dimensions, framing and that outputs carry no orientation tag (no double rotation at the DE).
+- **Atomic writers & LRU:** cache and folder-index writes via `mkstemp` + `os.replace`; `.tmp_wall_*` crash leftovers purged when older than 1 h; folder-index gains TTL (7 d) + caps (64 files / 32 MB) hooked into `cleanup_old_cache`; cache hits refresh mtime (real LRU eviction).
+- **Misc:** size-rejected URL downloads close the HTTP response; duplicate start-up temp cleanup removed from `app.py` (single flock-protected pass); dead operations pruned in the per-monitor `centered`/`spanned` paths.
+
+### Tests & Gates
+- 104 → 136 tests: journal retention (corrupt/missing fail-safe, overwrite-as-new, bounded replacements), XFCE partial-failure scenarios, EXIF geometry, input limits, session stability (30 changes, bounded RSS/temp), atomic-write and TTL unit tests.
+- Coverage 51.35% → 53.89% (gate ≥51%); ruff delta clean; mypy identical to baseline (9 pre-existing errors untouched).
+- Real-DE verification protocol documented in `scripts/real_desktop_endurance_check.py` (manual, requires explicit `--yes`).
+
+### Packaging
+- Version `1.0.4` in `pyproject.toml`, `setup.py`, `__init__.py`, `build_deb.sh`, `build_appimage.sh`, `install.sh`, metainfo.
+- Rebuilt `wallshuffle_1.0.4_all.deb` and `WallShuffle-1.0.4-x86_64.AppImage`; `SHA256SUMS.txt` now lists the deb and both AppImage names.
+
 ## [1.0.3] - 2026-09-24
 ### Fixed — Dock launch regression (v1.0.2 broke GUI open)
 - **GUI crash:** Remove local `from gi.repository import GLib` shadowing global in `WallpaperApp.__init__` (`UnboundLocalError` on every dock launch); hermetic `WALLSHUFFLE_INSTANCE` socket suffix, no `sys.exit` in GTK vfuncs, `do_open` routing, fix missing `present_window` (`app.py`).

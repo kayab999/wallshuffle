@@ -16,7 +16,7 @@ ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 ICON_FILE="assets/icon.png"
 DESKTOP_FILE_SOURCE="data/$APP_ID.desktop"
 
-echo "--- Installing WallShuffle v1.0.3 (AppImage) ---"
+echo "--- Installing WallShuffle v1.0.4 (AppImage) ---"
 
 # --- 0. Pre-flight Check: libfuse2 (Critical for AppImages on modern Ubuntu/Debian) ---
 check_libfuse2() {
@@ -192,7 +192,7 @@ if command -v update-desktop-database &> /dev/null; then
 fi
 
 echo "--- Installation Complete! ---"
-echo "WallShuffle v1.0.3 has been installed."
+echo "WallShuffle v1.0.4 has been installed."
 echo "You can launch it from your application menu."
 echo "NOTE: dock pins to the old entry must be re-pinned once to $APP_ID."
 
