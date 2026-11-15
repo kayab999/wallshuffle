@@ -79,6 +79,16 @@ class TestPackaging(unittest.TestCase):
         data_md5 = hashlib.md5((REPO / "data" / "io.github.kayab999.WallShuffle.png").read_bytes()).hexdigest()
         self.assertEqual(assets_md5, data_md5, "data icon must match assets/icon.png")
 
+    def test_appimage_bundles_gi_overrides(self):
+        # PyInstaller does not collect gi.overrides automatically; without
+        # them GLib.timeout_add/idle_add fall back to 4-arg bindings and the
+        # GUI crashes on launch (dock regression). The build spec must collect
+        # them and ship a runtime hook that applies them.
+        build_sh = (REPO / "scripts" / "build_appimage.sh").read_text()
+        self.assertIn('collect_submodules("gi.overrides")', build_sh)
+        self.assertIn("runtime_hook_gi.py", build_sh)
+        self.assertTrue((REPO / "scripts" / "runtime_hook_gi.py").exists())
+
     def test_lazy_init(self):
         text = (REPO / "wallshuffle" / "__init__.py").read_text()
         self.assertIn("__getattr__", text)

@@ -50,6 +50,8 @@ hiddenimports += [
     "PIL.ImageEnhance",
 ]
 
+hiddenimports += collect_submodules("gi.overrides")
+
 # Optional tray backends — include whichever is present on the build host.
 try:
     import gi
@@ -84,7 +86,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["scripts/runtime_hook_gi.py"],
     excludes=[],
     noarchive=False,
     optimize=0,
