@@ -3,10 +3,15 @@ import os
 import subprocess
 import sys
 
+for _polluted in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH"):
+    os.environ.pop(_polluted, None)
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
+
+from .utils import _clean_child_env
 
 
 def wire_dialog_default(dialog, response_id, entry=None):
@@ -71,7 +76,14 @@ def show_error_dialog(message, parent=None):
     else:
         if has_display:
             try:
-                subprocess.run(["notify-send", "WallShuffle Error", message], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+                subprocess.run(
+                    ["notify-send", "WallShuffle Error", message],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    env=_clean_child_env(),
+                )
             except FileNotFoundError:
                 print(f"ERROR: {message} (notify-send not found)", file=sys.stderr)
         else:

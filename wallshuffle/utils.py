@@ -3,6 +3,20 @@ import logging
 import os
 import shutil
 import subprocess
+
+for _polluted in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH"):
+    os.environ.pop(_polluted, None)
+
+
+def _clean_child_env():
+    """Return os.environ without AppImage-polluted vars for subprocess calls."""
+    env = dict(os.environ)
+    for _k in ("XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "LD_LIBRARY_PATH",
+               "LD_PRELOAD", "PYTHONPATH", "GIO_MODULE_DIR", "GTK_PATH",
+               "GTK_IM_MODULE_FILE"):
+        env.pop(_k, None)
+    return env
+
 import time
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "wallshuffle")
@@ -106,6 +120,7 @@ def check_systemd_available():
             text=True,
             check=False,
             timeout=5,
+            env=_clean_child_env(),
         )
 
         if result.returncode == 0:

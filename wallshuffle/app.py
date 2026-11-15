@@ -2,6 +2,10 @@ import errno
 import fcntl
 import logging
 import os
+
+for _polluted in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH"):
+    os.environ.pop(_polluted, None)
+
 import shutil
 import signal  # For signal handlers
 import socket
@@ -56,7 +60,7 @@ from .gui_helpers import show_error_dialog
 from .online_sources import OnlineSourceManager
 from .theme_engine.engine import ThemeEngine
 from .ui import WallpaperAppWindow
-from .utils import CONFIG_DIR, check_systemd_available
+from .utils import CONFIG_DIR, _clean_child_env, check_systemd_available
 from .wallpaper_manager import WallpaperManager
 
 gi.require_version("Gtk", "3.0")
@@ -796,7 +800,7 @@ class WallpaperApp(Gtk.Application):
 
         donate_url = "https://buymeacoffee.com/kayabsoftware"
         try:
-            subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["xdg-open", donate_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_clean_child_env())
         except Exception as e:
             self.logger.warning(f"Could not open donation URL: {e}")
 

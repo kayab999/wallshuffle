@@ -2,6 +2,16 @@ import hashlib
 import json
 import logging
 import os
+
+# AppImages (and other bundled runtimes) export LD_LIBRARY_PATH pointing at the
+# bundle's own libs. That value is inherited by every subprocess we spawn
+# (gsettings, xrandr, xdg-open, ...), which then load the bundle's (possibly
+# incompatible) libglib/libgio instead of the system ones and silently fail to
+# apply changes. The Python interpreter has already loaded its libraries by the
+# time this module is imported, so dropping the variable from the environment is
+# safe and prevents the pollution from reaching child processes.
+for _polluted in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH"):
+    os.environ.pop(_polluted, None)
 import shutil
 import subprocess
 import threading
@@ -14,7 +24,7 @@ from PIL import Image, ImageOps
 
 # Deferred imports for Gdk/GLib to avoid crashes in headless environments
 from .constants import GNOME_COMPAT, MAX_CANVAS_PIXELS, MAX_INPUT_PIXELS
-from .utils import CONFIG_DIR
+from .utils import CONFIG_DIR, _clean_child_env
 
 # Reference journal: live map of what the desktop-environment config points at
 # (one slot per XFCE property, KDE desktop group or GNOME/MATE URI). The
@@ -199,7 +209,7 @@ class WallpaperManager:
             }
             for proc_name, de_name in process_map.items():
                 try:
-                    if subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=2).returncode == 0:
+                    if subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=2, env=_clean_child_env()).returncode == 0:
                         return de_name
                 except subprocess.CalledProcessError:
                     # Process not running (expected, continue checking)
@@ -229,7 +239,7 @@ class WallpaperManager:
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "is-active", "wallpaper-changer.timer"],
-                capture_output=True, text=True, timeout=2
+                capture_output=True, text=True, timeout=2, env=_clean_child_env()
             )
             return result.stdout.strip() == "active"
         except Exception as e:
@@ -244,7 +254,7 @@ class WallpaperManager:
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "list-timers", "wallpaper-changer.timer", "--format=json"],
-                capture_output=True, text=True, timeout=2
+                capture_output=True, text=True, timeout=2, env=_clean_child_env()
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -267,7 +277,12 @@ class WallpaperManager:
         try:
             cmd_str = ' '.join(command)
             self.logger.debug(f"Executing: {cmd_str} ({description})")
-            result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
+            # Subprocesses (gsettings, xrandr, ...) must not inherit the
+            # AppImage's XDG_DATA_DIRS / XDG_CONFIG_DIRS, otherwise dconf
+            # looks for its profile under the (read-only, ephemeral) mount
+            # point and silently fails to persist writes.
+            child_env = _clean_child_env()
+            result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout, env=child_env)
             if result.stderr:
                 self.logger.warning(f"Command '{' '.join(command)}' produced stderr: {result.stderr.strip()}")
             return True, ""
@@ -358,7 +373,7 @@ class WallpaperManager:
         if shutil.which("xrandr"):
             try:
                 import re
-                result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=2)
+                result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=2, env=_clean_child_env())
                 if result.returncode == 0:
                     monitor_info = []
                     pattern = re.compile(r" connected (?:primary )?(\d+)x(\d+)\+(\d+)\+(\d+)")
@@ -823,7 +838,7 @@ class WallpaperManager:
         try:
             result = subprocess.run(
                 ["gsettings", "list-keys", schema],
-                capture_output=True, text=True, timeout=3
+                capture_output=True, text=True, timeout=3, env=_clean_child_env()
             )
             if result.returncode != 0:
                 error_msg = f"GSettings schema '{schema}' is not available on this system. Stderr: {result.stderr.strip()}"
@@ -1009,7 +1024,8 @@ class WallpaperManager:
                 ["xfconf-query", "-c", "xfce4-desktop", "-l"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                env=_clean_child_env()
             )
             if props_result.returncode != 0:
                 error_msg = f"xfconf-query list failed: {props_result.stderr.strip()}"

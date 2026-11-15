@@ -3,7 +3,10 @@ import os
 import shutil
 import sys
 
-from .utils import escape_systemd_path, escape_systemd_working_dir
+for _polluted in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH"):
+    os.environ.pop(_polluted, None)
+
+from .utils import _clean_child_env, escape_systemd_path, escape_systemd_working_dir
 
 
 def _find_executable_for_timer():
@@ -95,7 +98,7 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
 
     try:
         # Get existing crontab
-        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False, timeout=5)
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False, timeout=5, env=_clean_child_env())
         lines = result.stdout.splitlines() if result.returncode == 0 else []
 
         # Filter out existing entries
@@ -109,7 +112,7 @@ def setup_cron_fallback(interval, startup, run_subprocess_func):
 
         # Write back
         new_crontab = "\n".join(new_lines) + "\n"
-        subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True, timeout=5)
+        subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True, timeout=5, env=_clean_child_env())
         return True
     except Exception as e:
         logging.error(f"Failed to setup cron fallback: {e}")
